@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation provides functions to perform running (online) gradient calculations using a recursive least squares (RLS) algorithm. This method allows for updating regression parameters as new data points are added without the need to reprocess the entire dataset. The primary focus is on maintaining the current state of the regression calculation, including the inverse covariance matrix and the regression coefficients.
+This implementation provides functions to perform running gradient calculations using a recursive least squares algorithm. This method allows for updating regression parameters as new data points are added without the need to reprocess the entire dataset. The primary focus is on maintaining the current state of the regression calculation, including the inverse covariance matrix and the regression coefficients.
 
 ## Why Use Recursive Least Squares (RLS)?
 
