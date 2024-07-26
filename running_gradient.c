@@ -80,10 +80,14 @@ double quickselect(double* arr, size_t left, size_t right, size_t k) {
 void add_data_point(RunningGradient *rg, double y) {
     double x[2] = {rg->num_points, 1}; // Setup data point vector x
 
-    // Do recursive least squares computations
     // Calculate a scalar value 'temp' to ensure numerical stability
-    double temp = 1 + (x[0] * rg->inverse_cov_matrix[0][0] + x[1] * rg->inverse_cov_matrix[1][0]) * x[0] + 
-                      (x[0] * rg->inverse_cov_matrix[0][1] + x[1] * rg->inverse_cov_matrix[1][1]) * x[1];
+    double temp = 1.0 + (x[0] * rg->inverse_cov_matrix[0][0] + x[1] * rg->inverse_cov_matrix[1][0]) * x[0] + 
+                       (x[0] * rg->inverse_cov_matrix[0][1] + x[1] * rg->inverse_cov_matrix[1][1]) * x[1];
+
+    if (fabs(temp) < 1e-10) {
+        fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
+        exit(EXIT_FAILURE);
+    }
 
     // Compute temporary vector 'tmp' to adjust the inverse covariance matrix
     double tmp[2] = {rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1], 
@@ -92,21 +96,18 @@ void add_data_point(RunningGradient *rg, double y) {
     // Update the inverse covariance matrix by removing old data influence and adding new data point influence
     rg->inverse_cov_matrix[0][0] -= (tmp[0] * tmp[0]) / temp;
     rg->inverse_cov_matrix[0][1] -= (tmp[0] * tmp[1]) / temp;
-    rg->inverse_cov_matrix[1][0] -= (tmp[1] * tmp[0]) / temp;
+    rg->inverse_cov_matrix[1][0] = rg->inverse_cov_matrix[0][1]; // Ensure symmetry
     rg->inverse_cov_matrix[1][1] -= (tmp[1] * tmp[1]) / temp;
 
-    // Ensure the inverse covariance matrix remains symmetric
-    rg->inverse_cov_matrix[0][0] = 0.5 * (rg->inverse_cov_matrix[0][0] + rg->inverse_cov_matrix[0][1]);
-    rg->inverse_cov_matrix[1][1] = 0.5 * (rg->inverse_cov_matrix[1][0] + rg->inverse_cov_matrix[1][1]);
+    // Calculate the prediction error
+    double prediction_error = y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1]);
 
     // Update the coefficients (slope and intercept) of the linear model using the new data point
-    rg->coefficients[0] += (rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1]) * 
-                           (y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1]));
-    rg->coefficients[1] += (rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1]) * 
-                           (y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1]));
+    rg->coefficients[0] += (rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1]) * prediction_error;
+    rg->coefficients[1] += (rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1]) * prediction_error;
 
     // Update the residual sum of squares
-    rg->residual_sum_squares += pow((y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1])), 2.0) * temp;
+    rg->residual_sum_squares += pow(prediction_error, 2.0) * temp;
 
     // Increment the count of data points processed
     rg->num_points += 1;
