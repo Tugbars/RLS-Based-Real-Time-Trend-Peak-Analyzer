@@ -3,14 +3,6 @@
 #include <math.h>
 #include <assert.h>
 
-// Structure to hold the running gradient calculation data
-typedef struct {
-    size_t num_points;
-    double inverse_cov_matrix[2][2];
-    double coefficients[2];
-    double residual_sum_squares;
-} RunningGradient;
-
 /**
  * @brief Initializes the RunningGradient structure.
  * 
