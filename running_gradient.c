@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
+#include "running_gradient.h"
 
 /**
  * @brief Initializes the RunningGradient structure.
