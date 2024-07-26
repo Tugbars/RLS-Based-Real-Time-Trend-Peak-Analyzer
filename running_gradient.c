@@ -144,7 +144,7 @@ double calculate_standard_error(const RunningGradient *rg) {
  * @param stddev The standard deviation of the normal distribution.
  * @return The cumulative probability for the given value.
  */
-static double normal_cdf(double value, double mean, double stddev) {
+double normal_cdf(double value, double mean, double stddev) {
     if (stddev == 0) {
         if (value < mean)
             return 0;
