@@ -4,6 +4,12 @@
 #include <assert.h>
 #include "running_gradient.h"
 
+#define NO_PEAK_FOUND UINT16_MAX
+#define WINDOW_SIZE 5
+#define GRADIENT_INCREASE_THRESHOLD 0.05
+#define GRADIENT_DECREASE_THRESHOLD -0.05
+#define DECREASE_TREND_LENGTH 3
+
 /**
  * @brief Initializes the RunningGradient structure.
  * 
