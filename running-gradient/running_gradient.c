@@ -316,6 +316,109 @@ size_t count_steps_without_decrease_robust(const double* data, size_t size, doub
     return size;
 }
 
+
+/**
+ * @brief Counts the number of steps with a noticeable increase to the left, robust to outliers.
+ * 
+ * This function counts the number of consecutive data points, starting from the start of the array,
+ * that show a significant increasing trend. It discards the upper quantile of data points 
+ * to mitigate the impact of outliers. The function returns the count of such steps.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index.
+ * @param probability_of_increase The probability threshold to consider an increase.
+ * @param quantile_discard The upper quantile of data points to discard (e.g., 0.10 for the top 10%).
+ * @param gradient_increase_threshold The threshold above which a gradient is considered an increase.
+ * @return The number of steps with a noticeable increase.
+ * 
+ * @note This function is useful for analyzing trends in noisy data sets, where outliers can distort the overall trend.
+ */
+size_t count_steps_with_increase_robust_left(const double* data, size_t start_idx, double quantile_discard, double gradient_increase_threshold, double gradient_decrease_threshold) {
+    assert(0 <= quantile_discard && quantile_discard <= 1 &&
+           "quantile_discard must be in the range [0, 1]");
+
+    if (start_idx == 0)
+        return 0;
+
+    double quantile_thresh = find_upper_quantile(data, start_idx + 1, quantile_discard);
+
+    RunningGradient rg;
+    init_running_gradient(&rg, WINDOW_SIZE);  // Use the windowed approach
+
+    size_t count = 0;
+    for (size_t i = start_idx; i != SIZE_MAX; --i) {
+        if (data[i] <= quantile_thresh) {
+            add_data_point(&rg, data[i]);
+            if (rg.num_points > 1) {
+                double gradient = calculate_gradient(&rg);
+                if (gradient > gradient_increase_threshold) {
+                    count++;
+                } else if (gradient > gradient_decrease_threshold) {
+                    // Ignore small decreases
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+        if (i == 0) break;  // Prevent underflow
+    }
+
+    free_running_gradient(&rg);
+    return count;
+}
+
+/**
+ * @brief Counts the number of steps with a noticeable increase to the right, robust to outliers.
+ * 
+ * This function counts the number of consecutive data points, starting from the start of the array,
+ * that show a significant increasing trend. It discards the upper quantile of data points 
+ * to mitigate the impact of outliers. The function returns the count of such steps.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index.
+ * @param probability_of_increase The probability threshold to consider an increase.
+ * @param quantile_discard The upper quantile of data points to discard (e.g., 0.10 for the top 10%).
+ * @param gradient_increase_threshold The threshold above which a gradient is considered an increase.
+ * @return The number of steps with a noticeable increase.
+ * 
+ * @note This function is useful for analyzing trends in noisy data sets, where outliers can distort the overall trend.
+ */
+size_t count_steps_with_increase_robust_right(const double* data, size_t start_idx, size_t size, double quantile_discard, double gradient_increase_threshold, double gradient_decrease_threshold) {
+    assert(0 <= quantile_discard && quantile_discard <= 1 &&
+           "quantile_discard must be in the range [0, 1]");
+    assert(start_idx < size && "start_idx must be less than size");
+
+    if (start_idx >= size - 1)
+        return 0;
+
+    double quantile_thresh = find_upper_quantile(data + start_idx, size - start_idx, quantile_discard);
+
+    RunningGradient rg;
+    init_running_gradient(&rg, WINDOW_SIZE);  // Use the windowed approach
+
+    size_t count = 0;
+    for (size_t i = start_idx + 1; i < size; ++i) {
+        if (data[i] <= quantile_thresh) {
+            add_data_point(&rg, data[i]);
+            if (rg.num_points > 1) {
+                double gradient = calculate_gradient(&rg);
+                if (gradient > gradient_increase_threshold) {
+                    count++;
+                } else if (gradient > gradient_decrease_threshold) {
+                    // Ignore small decreases
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    free_running_gradient(&rg);
+    return count;
+}
+
 /**
  * @brief Calculates the probability that the values in the data set are increasing, robust to outliers.
  * 
@@ -387,4 +490,58 @@ void process_data_in_chunks(const double *data, size_t size) {
             printf("Chunk %zu-%zu: Not enough data points to calculate gradient.\n", i, end - 1);
         }
     }
+}
+
+/**
+ * @brief Searches for a peak in the given array interval using a windowed running gradient approach.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index of the interval.
+ * @param end_idx The ending index of the interval.
+ * @return The index of the peak if found, otherwise NO_PEAK_FOUND.
+ */
+uint16_t find_peak(const double *data, size_t start_idx, size_t end_idx) {
+    assert(start_idx < end_idx && "Start index must be less than end index.");
+
+    RunningGradient rg;
+    init_running_gradient(&rg, 4);
+
+    bool increasing = false;
+    uint16_t peak_index = NO_PEAK_FOUND;
+    size_t decrease_trend_count = 0;
+
+    for (size_t i = start_idx; i <= end_idx; ++i) {
+        add_data_point(&rg, data[i]);
+
+         //printf("Added point at index %zu: %f\n", i, data[i]);
+
+        if (rg.num_points > 1) {
+            double gradient = calculate_gradient(&rg);
+            printf("Gradient at index %zu: %f\n", i, gradient);
+
+            if (gradient > GRADIENT_INCREASE_THRESHOLD) {
+                increasing = true;
+                peak_index = (uint16_t)i; // Update peak index to the current point
+                decrease_trend_count = 0; // Reset the decrease trend count
+            } else if (increasing) {
+                // Check for a decreasing trend
+                if (gradient < GRADIENT_DECREASE_THRESHOLD) {
+                    decrease_trend_count++;
+                } else {
+                    decrease_trend_count = 0; // Reset if trend is broken
+                }
+
+                // If we've seen a sufficient decrease trend, declare the peak
+                if (decrease_trend_count >= DECREASE_TREND_LENGTH) {
+                    //printf("Peak found at index: %u, value: %f\n", peak_index, data[peak_index]);
+                    free_running_gradient(&rg);
+                    return peak_index;
+                }
+            }
+        }
+    }
+
+    printf("No peak found in the given interval.\n");
+    free_running_gradient(&rg);
+    return NO_PEAK_FOUND; // No peak found
 }
