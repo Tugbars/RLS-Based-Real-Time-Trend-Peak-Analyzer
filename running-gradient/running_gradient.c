@@ -72,45 +72,101 @@ double quickselect(double* arr, size_t left, size_t right, size_t k) {
 }
 
 /**
- * @brief Adds a new data point to the RunningGradient structure.
+ * @brief Adds a new data point to the RunningGradient structure and updates the regression coefficients.
+ * 
+ * This function updates the regression coefficients using a numerically stable Recursive Least Squares (RLS) algorithm.
+ * It maintains a window of recent data points and adjusts the coefficients incrementally as new data points are added.
+ * The inverse covariance matrix is updated to ensure efficient and stable coefficient updates.
  * 
  * @param rg Pointer to the RunningGradient structure.
  * @param y The new data point value.
  */
 void add_data_point(RunningGradient *rg, double y) {
-    double x[2] = {rg->num_points, 1}; // Setup data point vector x
+    // Add the new data point to the windowed data set
+    if (rg->num_points < rg->max_points) {
+        // If the current number of data points is less than the maximum allowed points,
+        // add the new data point to the array and increment the number of data points.
+        rg->y[rg->num_points++] = y;
+    } else {
+        // If the window is already full, shift all existing data points one position to the left
+        // to make room for the new data point. This ensures that we maintain a fixed-size window of recent data points.
+        for (size_t i = 0; i < rg->max_points - 1; ++i) {
+            rg->y[i] = rg->y[i + 1];
+        }
+        // Add the new data point at the end of the array.
+        rg->y[rg->max_points - 1] = y;
+    }
 
-    // Calculate a scalar value 'temp' to ensure numerical stability
+    // Compute the least squares coefficients using the data in the window
+    double sum_x = 0.0, sum_y = 0.0, sum_xx = 0.0, sum_xy = 0.0;
+    // Determine the number of data points to consider in the calculations.
+    // If the number of data points is less than the maximum allowed points, use the current number of data points.
+    // Otherwise, use the maximum allowed points.
+    size_t points_to_consider = (rg->num_points < rg->max_points) ? rg->num_points : rg->max_points;
+
+    // Loop through each data point in the window and calculate the necessary sums for x, y, x^2, and xy.
+    for (size_t i = 0; i < points_to_consider; ++i) {
+        sum_x += rg->x[i]; // Sum of x-values
+        sum_y += rg->y[i]; // Sum of y-values
+        sum_xx += rg->x[i] * rg->x[i]; // Sum of squared x-values
+        sum_xy += rg->x[i] * rg->y[i]; // Sum of the product of each x and its corresponding y-value
+    }
+
+    // Calculate the denominator for the normal equations.
+    // This denominator is used in the formulas for calculating the regression coefficients.
+    double denominator = points_to_consider * sum_xx - sum_x * sum_x;
+    if (denominator != 0.0) {
+        // If the denominator is not zero, calculate the slope and intercept using the normal equations.
+        rg->coefficients[0] = (points_to_consider * sum_xy - sum_x * sum_y) / denominator; // Slope
+        rg->coefficients[1] = (sum_y * sum_xx - sum_x * sum_xy) / denominator; // Intercept
+    } else {
+        // If the denominator is zero, set the slope and intercept to zero to avoid undefined behavior.
+        rg->coefficients[0] = 0.0;
+        rg->coefficients[1] = 0.0;
+    }
+
+    // Update the residual sum of squares (RSS).
+    // RSS measures the discrepancy between the data and the regression model.
+    rg->residual_sum_squares = 0.0;
+    for (size_t i = 0; i < points_to_consider; ++i) {
+        // Calculate the prediction error for each data point within the window.
+        double error = rg->y[i] - (rg->coefficients[0] * rg->x[i] + rg->coefficients[1]);
+        // Sum the squared prediction errors to obtain the residual sum of squares.
+        rg->residual_sum_squares += error * error;
+    }
+
+    // Setup the data point vector x.
+    // x[0] represents the independent variable (e.g., the time step or index) and x[1] is typically 1 (for the intercept term).
+    double x[2] = {rg->num_points, 1};
+
+    // Calculate a scalar value 'temp' to ensure numerical stability.
+    // 'temp' is used to scale the influence of the new data point in the inverse covariance matrix update.
     double temp = 1.0 + (x[0] * rg->inverse_cov_matrix[0][0] + x[1] * rg->inverse_cov_matrix[1][0]) * x[0] + 
                        (x[0] * rg->inverse_cov_matrix[0][1] + x[1] * rg->inverse_cov_matrix[1][1]) * x[1];
 
+    // Check if 'temp' is too close to zero to avoid numerical instability issues.
     if (fabs(temp) < 1e-10) {
         fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
         exit(EXIT_FAILURE);
     }
 
-    // Compute temporary vector 'tmp' to adjust the inverse covariance matrix
+    // Compute temporary vector 'tmp' to adjust the inverse covariance matrix.
     double tmp[2] = {rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1], 
                      rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1]};
 
-    // Update the inverse covariance matrix by removing old data influence and adding new data point influence
+    // Update the inverse covariance matrix by removing old data influence and adding new data point influence.
     rg->inverse_cov_matrix[0][0] -= (tmp[0] * tmp[0]) / temp;
     rg->inverse_cov_matrix[0][1] -= (tmp[0] * tmp[1]) / temp;
     rg->inverse_cov_matrix[1][0] = rg->inverse_cov_matrix[0][1]; // Ensure symmetry
     rg->inverse_cov_matrix[1][1] -= (tmp[1] * tmp[1]) / temp;
 
-    // Calculate the prediction error
+    // Calculate the prediction error.
     double prediction_error = y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1]);
 
-    // Update the coefficients (slope and intercept) of the linear model using the new data point
+    // Update the coefficients (slope and intercept) of the linear model using the new data point.
+    // The inverse covariance matrix helps determine the influence of the new data point on the coefficients.
     rg->coefficients[0] += (rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1]) * prediction_error;
-    rg->coefficients[1] += (rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1]) * prediction_error;
-
-    // Update the residual sum of squares
-    rg->residual_sum_squares += pow(prediction_error, 2.0) * temp;
-
-    // Increment the count of data points processed
-    rg->num_points += 1;
+    rg->coefficients[1] += (rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1]) * prediction_error;
 }
 
 /**
