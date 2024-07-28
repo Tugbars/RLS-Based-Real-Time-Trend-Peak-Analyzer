@@ -11,7 +11,6 @@
 #define WINDOW_SIZE 5
 #define DECREASE_TREND_LENGTH 5
 
-
 /**
  * @brief Initializes the RunningGradient structure.
  * 
@@ -25,6 +24,8 @@ void init_running_gradient(RunningGradient *rg, size_t window_size) {
     rg->coefficients[0] = 0;
     rg->coefficients[1] = 0;
     rg->residual_sum_squares = 0.0;
+    rg->inverse_cov_matrix[0][0] = 1e6; rg->inverse_cov_matrix[0][1] = 0;
+    rg->inverse_cov_matrix[1][0] = 0; rg->inverse_cov_matrix[1][1] = 1e6;
 
     for (size_t i = 0; i < window_size; ++i) {
         rg->x[i] = (double)i; // Pre-fill x values for the window
@@ -71,70 +72,101 @@ size_t partition(double* arr, size_t left, size_t right, size_t pivotIndex) {
 }
 
 /**
- * @brief Quickselect algorithm to find the k-th smallest element.
+ * @brief Adds a new data point to the RunningGradient structure and updates the regression coefficients.
  * 
- * @param arr The array.
- * @param left The left index.
- * @param right The right index.
- * @param k The index to find.
- * @return The k-th smallest element.
- */
-double quickselect(double* arr, size_t left, size_t right, size_t k) {
-    if (left == right) {
-        return arr[left];  // If the list contains only one element, return that element
-    }
-    size_t pivotIndex = left + (right - left) / 2;
-    pivotIndex = partition(arr, left, right, pivotIndex);
-    if (k == pivotIndex) {
-        return arr[k];
-    } else if (k < pivotIndex) {
-        return quickselect(arr, left, pivotIndex - 1, k);
-    } else {
-        return quickselect(arr, pivotIndex + 1, right, k);
-    }
-}
-
-/**
- * @brief Adds a new data point to the RunningGradient structure.
+ * This function updates the regression coefficients using a numerically stable Recursive Least Squares (RLS) algorithm.
+ * It maintains a window of recent data points and adjusts the coefficients incrementally as new data points are added.
+ * The inverse covariance matrix is updated to ensure efficient and stable coefficient updates.
  * 
  * @param rg Pointer to the RunningGradient structure.
  * @param y The new data point value.
  */
 void add_data_point(RunningGradient *rg, double y) {
+    // Add the new data point to the windowed data set
     if (rg->num_points < rg->max_points) {
+        // If the current number of data points is less than the maximum allowed points,
+        // add the new data point to the array and increment the number of data points.
         rg->y[rg->num_points++] = y;
     } else {
-        // Shift data to the left to make room for the new point
+        // If the window is already full, shift all existing data points one position to the left
+        // to make room for the new data point. This ensures that we maintain a fixed-size window of recent data points.
         for (size_t i = 0; i < rg->max_points - 1; ++i) {
             rg->y[i] = rg->y[i + 1];
         }
+        // Add the new data point at the end of the array.
         rg->y[rg->max_points - 1] = y;
     }
 
     // Compute the least squares coefficients using the data in the window
     double sum_x = 0.0, sum_y = 0.0, sum_xx = 0.0, sum_xy = 0.0;
-    for (size_t i = 0; i < rg->num_points; ++i) {
-        sum_x += rg->x[i];
-        sum_y += rg->y[i];
-        sum_xx += rg->x[i] * rg->x[i];
-        sum_xy += rg->x[i] * rg->y[i];
+    // Determine the number of data points to consider in the calculations.
+    // If the number of data points is less than the maximum allowed points, use the current number of data points.
+    // Otherwise, use the maximum allowed points.
+    size_t points_to_consider = (rg->num_points < rg->max_points) ? rg->num_points : rg->max_points;
+
+    // Loop through each data point in the window and calculate the necessary sums for x, y, x^2, and xy.
+    for (size_t i = 0; i < points_to_consider; ++i) {
+        sum_x += rg->x[i]; // Sum of x-values
+        sum_y += rg->y[i]; // Sum of y-values
+        sum_xx += rg->x[i] * rg->x[i]; // Sum of squared x-values
+        sum_xy += rg->x[i] * rg->y[i]; // Sum of the product of each x and its corresponding y-value
     }
 
-    double denominator = rg->num_points * sum_xx - sum_x * sum_x;
+    // Calculate the denominator for the normal equations.
+    // This denominator is used in the formulas for calculating the regression coefficients.
+    double denominator = points_to_consider * sum_xx - sum_x * sum_x;
     if (denominator != 0.0) {
-        rg->coefficients[0] = (rg->num_points * sum_xy - sum_x * sum_y) / denominator;
-        rg->coefficients[1] = (sum_y * sum_xx - sum_x * sum_xy) / denominator;
+        // If the denominator is not zero, calculate the slope and intercept using the normal equations.
+        rg->coefficients[0] = (points_to_consider * sum_xy - sum_x * sum_y) / denominator; // Slope
+        rg->coefficients[1] = (sum_y * sum_xx - sum_x * sum_xy) / denominator; // Intercept
     } else {
+        // If the denominator is zero, set the slope and intercept to zero to avoid undefined behavior.
         rg->coefficients[0] = 0.0;
         rg->coefficients[1] = 0.0;
     }
 
-    // Update the residual sum of squares
+    // Update the residual sum of squares (RSS).
+    // RSS measures the discrepancy between the data and the regression model.
     rg->residual_sum_squares = 0.0;
-    for (size_t i = 0; i < rg->num_points; ++i) {
+    for (size_t i = 0; i < points_to_consider; ++i) {
+        // Calculate the prediction error for each data point within the window.
         double error = rg->y[i] - (rg->coefficients[0] * rg->x[i] + rg->coefficients[1]);
+        // Sum the squared prediction errors to obtain the residual sum of squares.
         rg->residual_sum_squares += error * error;
     }
+
+    // Setup the data point vector x.
+    // x[0] represents the independent variable (e.g., the time step or index) and x[1] is typically 1 (for the intercept term).
+    double x[2] = {rg->num_points, 1};
+
+    // Calculate a scalar value 'temp' to ensure numerical stability.
+    // 'temp' is used to scale the influence of the new data point in the inverse covariance matrix update.
+    double temp = 1.0 + (x[0] * rg->inverse_cov_matrix[0][0] + x[1] * rg->inverse_cov_matrix[1][0]) * x[0] + 
+                       (x[0] * rg->inverse_cov_matrix[0][1] + x[1] * rg->inverse_cov_matrix[1][1]) * x[1];
+
+    // Check if 'temp' is too close to zero to avoid numerical instability issues.
+    if (fabs(temp) < 1e-10) {
+        fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Compute temporary vector 'tmp' to adjust the inverse covariance matrix.
+    double tmp[2] = {rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1], 
+                     rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1]};
+
+    // Update the inverse covariance matrix by removing old data influence and adding new data point influence.
+    rg->inverse_cov_matrix[0][0] -= (tmp[0] * tmp[0]) / temp;
+    rg->inverse_cov_matrix[0][1] -= (tmp[0] * tmp[1]) / temp;
+    rg->inverse_cov_matrix[1][0] = rg->inverse_cov_matrix[0][1]; // Ensure symmetry
+    rg->inverse_cov_matrix[1][1] -= (tmp[1] * tmp[1]) / temp;
+
+    // Calculate the prediction error.
+    double prediction_error = y - (x[0] * rg->coefficients[0] + x[1] * rg->coefficients[1]);
+
+    // Update the coefficients (slope and intercept) of the linear model using the new data point.
+    // The inverse covariance matrix helps determine the influence of the new data point on the coefficients.
+    rg->coefficients[0] += (rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1]) * prediction_error;
+    rg->coefficients[1] += (rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1]) * prediction_error;
 }
 
 /**
@@ -328,6 +360,109 @@ double probability_values_are_increasing_robust(const double* data, size_t size,
 
 
 /**
+ * @brief Counts the number of steps with a noticeable increase to the left, robust to outliers.
+ * 
+ * This function counts the number of consecutive data points, starting from the start of the array,
+ * that show a significant increasing trend. It discards the upper quantile of data points 
+ * to mitigate the impact of outliers. The function returns the count of such steps.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index.
+ * @param probability_of_increase The probability threshold to consider an increase.
+ * @param quantile_discard The upper quantile of data points to discard (e.g., 0.10 for the top 10%).
+ * @param gradient_increase_threshold The threshold above which a gradient is considered an increase.
+ * @return The number of steps with a noticeable increase.
+ * 
+ * @note This function is useful for analyzing trends in noisy data sets, where outliers can distort the overall trend.
+ */
+size_t count_steps_with_increase_robust_left(const double* data, size_t start_idx, double quantile_discard, double gradient_increase_threshold, double gradient_decrease_threshold) {
+    assert(0 <= quantile_discard && quantile_discard <= 1 &&
+           "quantile_discard must be in the range [0, 1]");
+
+    if (start_idx == 0)
+        return 0;
+
+    double quantile_thresh = find_upper_quantile(data, start_idx + 1, quantile_discard);
+
+    RunningGradient rg;
+    init_running_gradient(&rg, WINDOW_SIZE);  // Use the windowed approach
+
+    size_t count = 0;
+    for (size_t i = start_idx; i != SIZE_MAX; --i) {
+        if (data[i] <= quantile_thresh) {
+            add_data_point(&rg, data[i]);
+            if (rg.num_points > 1) {
+                double gradient = calculate_gradient(&rg);
+                if (gradient > gradient_increase_threshold) {
+                    count++;
+                } else if (gradient > gradient_decrease_threshold) {
+                    // Ignore small decreases
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+        if (i == 0) break;  // Prevent underflow
+    }
+
+    free_running_gradient(&rg);
+    return count;
+}
+
+/**
+ * @brief Counts the number of steps with a noticeable increase to the right, robust to outliers.
+ * 
+ * This function counts the number of consecutive data points, starting from the start of the array,
+ * that show a significant increasing trend. It discards the upper quantile of data points 
+ * to mitigate the impact of outliers. The function returns the count of such steps.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index.
+ * @param probability_of_increase The probability threshold to consider an increase.
+ * @param quantile_discard The upper quantile of data points to discard (e.g., 0.10 for the top 10%).
+ * @param gradient_increase_threshold The threshold above which a gradient is considered an increase.
+ * @return The number of steps with a noticeable increase.
+ * 
+ * @note This function is useful for analyzing trends in noisy data sets, where outliers can distort the overall trend.
+ */
+size_t count_steps_with_increase_robust_right(const double* data, size_t start_idx, size_t size, double quantile_discard, double gradient_increase_threshold, double gradient_decrease_threshold) {
+    assert(0 <= quantile_discard && quantile_discard <= 1 &&
+           "quantile_discard must be in the range [0, 1]");
+    assert(start_idx < size && "start_idx must be less than size");
+
+    if (start_idx >= size - 1)
+        return 0;
+
+    double quantile_thresh = find_upper_quantile(data + start_idx, size - start_idx, quantile_discard);
+
+    RunningGradient rg;
+    init_running_gradient(&rg, WINDOW_SIZE);  // Use the windowed approach
+
+    size_t count = 0;
+    for (size_t i = start_idx + 1; i < size; ++i) {
+        if (data[i] <= quantile_thresh) {
+            add_data_point(&rg, data[i]);
+            if (rg.num_points > 1) {
+                double gradient = calculate_gradient(&rg);
+                if (gradient > gradient_increase_threshold) {
+                    count++;
+                } else if (gradient > gradient_decrease_threshold) {
+                    // Ignore small decreases
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    free_running_gradient(&rg);
+    return count;
+}
+
+
+/**
  * @brief Processes the data in chunks of a specified size and calculates various statistics for each chunk.
  * 
  * @param data The data points.
@@ -421,3 +556,35 @@ uint16_t find_peak(const double *data, size_t start_idx, size_t end_idx) {
     return NO_PEAK_FOUND; // No peak found
 }
 
+/**
+ * @brief Wraps the find_peak function to take every fifth item in the specified interval.
+ * 
+ * @param data The array of data points.
+ * @param start_idx The starting index of the interval.
+ * @param end_idx The ending index of the interval.
+ * @return The index of the peak if found, otherwise NO_PEAK_FOUND.
+ */
+uint16_t find_peak_every_fifth(const double *data, size_t start_idx, size_t end_idx) {
+    assert(start_idx < end_idx && "Start index must be less than end index.");
+    
+    size_t reduced_size = (end_idx - start_idx) / 5 + 1;
+    double *reduced_data = (double *)malloc(reduced_size * sizeof(double));
+    if (reduced_data == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    size_t idx = 0;
+    for (size_t i = start_idx; i <= end_idx; i += 5) {
+        reduced_data[idx++] = data[i];
+    }
+
+    uint16_t peak_index = find_peak(reduced_data, 0, idx - 1);
+    
+    if (peak_index != NO_PEAK_FOUND) {
+        peak_index = start_idx + peak_index * 5;
+    }
+
+    free(reduced_data);
+    return peak_index;
+}
