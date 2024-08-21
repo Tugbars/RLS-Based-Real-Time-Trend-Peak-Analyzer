@@ -756,21 +756,3 @@ bool find_true_peak_with_concavity_analysis(const double *values, size_t length,
     return false;
 }
 
-//ilerleme yapmamız lazım. 
-
-//eğer bu koşullar sağlanıyorsa peak test'e girilmeli. determine position edilmeli dönme nooktasının bir öncesinde. diğer tarafa geçilmeli. 
-
-//detect initial concavity. 
-//arka arkaya 2 tane yükseliş bulmas ılazım. 
-//ondan sonra trende bakmak lazım. 
-//2 tane yükseliş bulursak ondan sonra peake göre osition bakmak lazım. 
-//positiondan sonra diğer tarafa ilerlemek lazım. 
-//hem artış sayıları ölçülmeli arka arkaya olanlarda. 15.de de denk gelmiş olabiliriz. 2. yükselişe ama oradan sonra çok hızlı iniyor diye. 2 iniş boktan gözükebilir.
-//ya da daha iyisi bir çıkış + bir çıkış + bir negatifleşme buluncaya kadar devam etmek. 
-
-//peak bulamasa da direction bulacak şekilde bir second order gradient bulmak için quadratic'e oturtma, bir de first order bulmak için lineare oturtma yapmak lazım. 
-//bu oturtmalardan sorna ilk peak bakılacak. peak bulunamazsa direction bulunmaya çalışacak. direction bulunamıyorsa 2 veya 3. attempten sonra binary search'e geçilecek. 
-
-//extend_trend_towards_peak yavaş yavaş ilerleyen bir şey olacak yani. ve burada yeniden tanımlanacak bu üstteki fonksiyona göre. 
-//int analyze_sides_and_determine_trend(const double *data, size_t size, size_t interval, TrendContext *ctx) de burada olacak. 
-//process chunk left or right'a da gerek yok. saymak yerine gradient toplamak daha mantıklı. 
