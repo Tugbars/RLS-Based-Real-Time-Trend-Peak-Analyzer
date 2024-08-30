@@ -784,7 +784,6 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
     result.increase_info = trend_result.increase_info;
     result.decrease_info = trend_result.decrease_info;
 
-    // Use the global parameters defined in cubic_analysis_params
     double significance_threshold = cubic_analysis_params.significance_threshold;
     size_t duration_threshold = cubic_analysis_params.duration_threshold;
 
@@ -797,8 +796,9 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
         size_t index_difference = trend_result.increase_info.end_index - trend_result.increase_info.start_index;
         average_increase = sum_of_gradients / (double)index_difference;
 
-        // Evaluate significance
-        if (sum_of_gradients > significance_threshold && index_difference > duration_threshold) {
+        // Evaluate significance based on global threshold and new average conditions
+        if ((sum_of_gradients > significance_threshold && index_difference > duration_threshold) ||
+            (index_difference >= peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase)) {
             result.significant_increase = true;
         }
     }
@@ -809,8 +809,9 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
         size_t index_difference = trend_result.decrease_info.end_index - trend_result.decrease_info.start_index;
         average_decrease = sum_of_gradients / (double)index_difference;
 
-        // Evaluate significance
-        if (sum_of_gradients < -significance_threshold && index_difference > duration_threshold) {
+        // Evaluate significance based on global threshold and new average conditions
+        if ((sum_of_gradients < -significance_threshold && index_difference > duration_threshold) ||
+            (index_difference >= peak_analysis_params.min_consistent_trend_count && average_decrease < peak_analysis_params.min_average_decrease)) {
             result.significant_decrease = true;
         }
     }
@@ -831,3 +832,5 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
 
     return result;
 }
+
+//ilk average increase or decrease meselesini halletmemiz lazım. 

@@ -21,30 +21,42 @@ int main() {
 	}
 	*/
 	
-	// Define the criteria for significance
-    //const double significance_threshold = 11.0;
-    //const size_t duration_threshold = 5;
-
-	uint16_t window_cubic = 30;
-	uint16_t start_cubic_index = 130;
-
-	// Initialize the cubic RLS parameters with additional max trend counts
-    init_cubic_rls_analysis_parameters(
-        11.0,   // significance_thresh: Threshold for determining significant cubic trends
-        5,    // duration_thresh: Minimum number of consecutive points required for a trend
-        2,     // min_trend_count: Minimum number of consistent trends required for analysis
-        2,     // max_third_order_trend_decrease_count: Max consecutive decreases allowed in the trend
-        2      // max_third_order_trend_increase_count: Max consecutive increases allowed in the trend
+	init_cubic_rls_analysis_parameters(
+        7.0,   // significance_thresh: Threshold for determining significant cubic trends.
+               // Trends with a sum of gradients above this threshold are considered significant.
+        5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.
+               // Ensures that only sustained trends are analyzed.
+        2,     // min_trend_count: Minimum number of consistent trends required for cubic analysis.
+               // Helps filter out noise and minor fluctuations.
+        2,     // max_third_order_trend_decrease_count: Maximum number of consecutive decreases allowed in a cubic trend.
+               // Allows for minor fluctuations without discarding a potentially valid trend.
+        2      // max_third_order_trend_increase_count: Maximum number of consecutive increases allowed in a cubic trend.
+               // Helps to filter out noise when identifying a cubic trend.
     );
     
-    // Initialize the quadratic RLS parameters
+    // Initialize the quadratic RLS analysis parameters with the necessary thresholds
     init_quadratic_rls_analysis_parameters(
-        0.3,   // min_gradient_sum: Minimum cumulative sum of second-order gradients for valid trend
-        2,     // max_decrease_count: Max consecutive negative gradients allowed in an increasing trend
-        2      // max_increase_count: Max consecutive positive gradients allowed in a decreasing trend
+        0.3,   // min_gradient_sum: Minimum cumulative sum of second-order gradients required for a trend to be considered valid.
+               // Helps in identifying significant concave or convex regions.
+        2,     // max_decrease_count: Maximum number of consecutive negative gradients allowed when tracking an increasing trend.
+               // Allows for minor fluctuations without discarding a potentially valid trend.
+        2      // max_increase_count: Maximum number of consecutive positive gradients allowed when tracking a decreasing trend.
+               // Helps to filter out noise when identifying a decreasing trend.
+    );
+    
+    // Initialize the on-peak analysis parameters for average gradient thresholds and consistent trend count
+    init_on_peak_analysis_parameters(
+        0.45,  // min_avg_increase: Minimum average increase required to consider a significant increasing trend.
+               // Ensures that only trends with substantial average gradient are flagged as significant.
+        -0.45, // min_avg_decrease: Minimum average decrease required to consider a significant decreasing trend.
+               // Ensures that only trends with substantial average gradient are flagged as significant.
+        5      // min_consistent_trend_count: Minimum number of consecutive data points required for a trend to be considered consistent.
+               // Helps ensure that only sustained trends are analyzed.
     );
 
-	segment_trend_and_concavity_analysis(data, size, 30, 0.5);
+	segment_trend_and_concavity_analysis(data, size, 140, 0.5);
 
 	return 0;
 }
+
+//Segment analysis çok iyi değil. üzerinde durmam lazım. 

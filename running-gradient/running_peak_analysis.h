@@ -16,10 +16,11 @@ typedef struct {
 typedef struct {
     bool move_to_right;
     bool go_to_left;
-    bool close_to_peak;  // New flag to indicate proximity to a significant peak
-    bool far_to_peak;    // Flag to indicate distance from any significant peak
-    bool low_consistent_right; // New flag for consistent increments over more than 10 indices
-    bool low_consistent_left;  // New flag for consistent decrements over more than 10 indices
+    bool close_to_peak;  
+    bool far_to_peak;    
+    bool low_consistent_right; 
+    bool low_consistent_left;  
+    bool on_the_peak;   // New flag indicating the trend is exactly on the peak
 } TrendDirectionFlags;
 
 // Function to compare gradient parts, find direction, and then check initial concavity

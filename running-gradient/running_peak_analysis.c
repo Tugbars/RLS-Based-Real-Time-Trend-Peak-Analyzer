@@ -49,21 +49,18 @@
  *
  */
 static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResult *trends, size_t window_cubic, size_t start_cubic_index) {
-    // Initialize the flags with default values; assume far from peak initially.
-    TrendDirectionFlags flags = {false, false, false, true, false, false}; // far_to_peak is set to true, low_consistent flags added
+    TrendDirectionFlags flags = {false, false, false, true, false, false, false}; // Initialize with on_the_peak
 
     printf("Window start index: %zu, Window size: %zu\n", start_cubic_index, window_cubic);
 
     // Check for significant increasing trend
     if (trends->significant_increase) {
         size_t increase_end_index = trends->increase_info.end_index;
-        size_t increase_start_index = trends->increase_info.start_index;
 
         printf("Significant increase detected. Increase end index: %zu\n", increase_end_index);
 
+        // Determine if the significant increase is towards the right side of the window
         if (increase_end_index > start_cubic_index + (window_cubic / 2)) {
-            printf("Increase trend is towards the right side of the window.\n");
-
             if (increase_end_index >= start_cubic_index + window_cubic - 1) {
                 flags.move_to_right = true;
                 flags.close_to_peak = true;
@@ -76,10 +73,10 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
     // Check for significant decreasing trend
     if (trends->significant_decrease) {
         size_t decrease_start_index = trends->decrease_info.start_index;
-        size_t decrease_end_index = trends->decrease_info.end_index;
 
         printf("Significant decrease detected. Decrease start index: %zu\n", decrease_start_index);
 
+        // Determine if the significant decrease is towards the left side of the window
         if (decrease_start_index < start_cubic_index + (window_cubic / 2)) {
             flags.go_to_left = true;
             flags.close_to_peak = true;
@@ -88,22 +85,24 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         }
     }
 
+    // Set on_the_peak flag if both significant increase and decrease are detected
+    if (trends->significant_increase && trends->significant_decrease) {
+        flags.on_the_peak = true;
+        printf("On the peak detected. Flags set: on_the_peak.\n");
+    }
+
     // If no significant trend is detected, check for low consistent trends
     if (!trends->significant_increase && !trends->significant_decrease) {
         size_t increase_duration = trends->increase_info.end_index - trends->increase_info.start_index;
         size_t decrease_duration = trends->decrease_info.end_index - trends->decrease_info.start_index;
 
-        // Check for low consistent increase
-        if (increase_duration > 15) {  // TODO: SHOULD NOT BE HARDCODED. 
+        if (increase_duration > 15) {  // Replace with parameterized value later
             flags.low_consistent_right = true;
-            //flags.far_to_peak = false; // No longer far from a potential trend
             printf("Low consistent right trend detected over %zu indices.\n", increase_duration);
         }
 
-        // Check for low consistent decrease
-        if (decrease_duration > 15) { // TODO: SHOULD NOT BE HARDCODED. 
+        if (decrease_duration > 15) {  // Replace with parameterized value later
             flags.low_consistent_left = true;
-            //flags.far_to_peak = false; // No longer far from a potential trend
             printf("Low consistent left trend detected over %zu indices.\n", decrease_duration);
         }
     }
@@ -132,12 +131,16 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
     SegmentAnalysisResult result = {false, false, UNDECIDED, UNDETERMINED_PATTERN};
     
     printf("****************************************** Cubic regression increase/decrease interval analysis...\n");
-    // Step 1: Perform peak trend analysis to determine initial direction
     PeakTrendAnalysisResult significant_trends = detect_significant_gradient_trends(data, size, start_index, 30, forgetting_factor);
     
     printf("****************************************** Determining cubic regression linear gradient sums...\n");
-    // Step 2: Determine the trend direction based on the analysis
     TrendDirectionFlags direction_flags = determine_trend_direction(&significant_trends, 30, start_index);
+
+    if (direction_flags.on_the_peak) {
+        result.nextDirection = ON_PEAK;
+        printf("--> On the peak detected. Skipping direction analysis and proceeding with concavity analysis.\n");
+        goto concavity_analysis;
+    }
 
     if (direction_flags.move_to_right) {
         result.nextDirection = RIGHT_SIDE;
@@ -153,21 +156,16 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
         printf("--> Direction determined: LEFT_SIDE (low consistent left trend detected).\n");
     }
 
-    // Perform gradient comparison
     if (direction_flags.far_to_peak) {
         printf("--> Far from peak. Determining direction by comparing gradient parts...\n");
-        
-        printf("****************************************** Determining linear gradient sums...\n");
         GradientComparisonResult gradient_result = compare_gradient_parts(data, start_index, forgetting_factor);
 
-        // Print the results of gradient comparison
         printf("--> Total Gradient First Part: %.6f\n", gradient_result.total_gradient_first_part);
         printf("--> Total Gradient Second Part: %.6f\n", gradient_result.total_gradient_second_part);
         printf("--> Increase Count First Part: %zu\n", gradient_result.increase_count_first_part);
         printf("--> Increase Count Second Part: %zu\n", gradient_result.increase_count_second_part);
         printf("Dominant Side: %d\n", gradient_result.dominant_side);
 
-        // Override the direction if the gradient comparison gives a decisive result
         if (gradient_result.dominant_side != UNDECIDED) {
             result.nextDirection = gradient_result.dominant_side;
             if (gradient_result.dominant_side == LEFT_SIDE) {
@@ -179,7 +177,7 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
             printf("--> Gradient comparison result was UNDECIDED, not overriding the existing direction.\n");
         }
     } else {
-        // Step 4: If close to peak, analyze concavity in the chosen direction
+        concavity_analysis:
         printf("--> Close to peak. Performing concavity analysis...\n");
         
         if (significant_trends.significant_increase) {
@@ -188,8 +186,7 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
             size_t window_size = end_index - start_index;
     
             printf("--> Significant increase detected from index %zu to %zu. Calling quadratic regression...\n", start_index, end_index);
-            printf("*********************** CONCAVITY SUM ANALYSIS ************************\n");
-            track_gradient_trends_with_quadratic_regression(data, size, start_index, window_size, 1.0);
+            track_gradient_trends_with_quadratic_regression(data, size, start_index, window_size, forgetting_factor);
         }
         
         if (significant_trends.significant_decrease) {
@@ -198,8 +195,7 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
             size_t window_size = end_index - start_index;
     
             printf("--> Significant decrease detected from index %zu to %zu. Calling quadratic regression...\n", start_index, end_index);
-            printf("*********************** CONCAVITY SUM ANALYSIS ************************\n");
-            track_gradient_trends_with_quadratic_regression(data, size, start_index, window_size, 1.0);
+            track_gradient_trends_with_quadratic_regression(data, size, start_index, window_size, forgetting_factor);
         }
         
         printf("*********************** CONCAVITY SEGMENT ANALYSIS ************************\n");
@@ -236,13 +232,11 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
                 break;
         }
 
-        // Determine the direction based on the concavity pattern and the presence of a peak
         if (result.isTruePeak || result.isPotentialPeak) { 
             printf("--> Peak detected. Waiting for further analysis.\n");
         }
     }
 
-    // Final direction printout
     printf("Final Direction: ");
     switch (result.nextDirection) {
         case RIGHT_SIDE:
@@ -250,6 +244,9 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
             break;
         case LEFT_SIDE:
             printf("LEFT_SIDE\n");
+            break;
+        case ON_PEAK:
+            printf("ON_PEAK\n");
             break;
         case UNDECIDED:
         default:
@@ -259,4 +256,5 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const double *data, s
 
     return result;
 }
+
 

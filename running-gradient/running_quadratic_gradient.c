@@ -496,11 +496,14 @@ ConcavityPattern analyze_concavity_segments(const ConcavityAnalysisResult *conca
  * @param window_size The number of elements in the gradient array to analyze.
  * @return GradientTrendIndices A structure containing the start index, end index, validity, and maximum sum of the consistent increasing trend.
  */
-GradientTrendIndices find_consistent_increase_in_second_order(double *gradients, size_t start_index, size_t window_size) { //has no restart function. 
+GradientTrendIndices find_consistent_increase_in_second_order(double *gradients, size_t start_index, size_t window_size) {
     GradientTrendIndices increase_info = {0, 0, false, 0.0};
     bool tracking_increase = false;
     double cumulative_sum = 0.0;
     int decrease_count = 0;
+    double max_cumulative_sum = 0.0;  // Track the maximum cumulative sum encountered
+    size_t best_start_index = 0;  // Track the start index for the best trend
+    size_t best_end_index = 0;    // Track the end index for the best trend
 
     #ifdef DEBUG
     printf("Starting find_consistent_increase_in_second_order with start_index: %zu, window_size: %zu\n", start_index, window_size);
@@ -515,7 +518,7 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
 
         if (gradient > 0) {  // If the current gradient is positive
             if (!tracking_increase) {
-                // Start tracking the increase
+                // Start or resume tracking the increase
                 increase_info.start_index = start_index + i;
                 tracking_increase = true;
                 cumulative_sum = 0.0;  // Reset cumulative sum when starting to track
@@ -527,6 +530,13 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
             increase_info.end_index = start_index + i;
             cumulative_sum += gradient;
             decrease_count = 0;  // Reset decrease counter on positive gradient
+
+            // Update the best cumulative sum and indices
+            if (cumulative_sum > max_cumulative_sum) {
+                max_cumulative_sum = cumulative_sum;
+                best_start_index = increase_info.start_index;
+                best_end_index = increase_info.end_index;
+            }
 
             #ifdef DEBUG
             printf("Continuing tracking increase: Updated end_index to %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
@@ -544,21 +554,23 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
                 #ifdef DEBUG
                 printf("Stopped tracking increase due to consecutive decreases at index %zu\n", start_index + i);
                 #endif
-                break;
+
+                // Reset decrease count and continue to look for the next increase
+                decrease_count = 0;
             }
         }
     }
 
-    if (cumulative_sum > 0) {
+    // Use the best cumulative sum and indices found during tracking
+    if (max_cumulative_sum > 0) {
         increase_info.valid = true;
-        increase_info.max_sum = cumulative_sum;
+        increase_info.max_sum = max_cumulative_sum;
+        increase_info.start_index = best_start_index;
+        increase_info.end_index = best_end_index;
 
-        printf("Valid increase found from index %zu to %zu with max sum %.6f\n", increase_info.start_index, increase_info.end_index, cumulative_sum);
-
+        printf("Valid increase found from index %zu to %zu with max sum %.6f\n", increase_info.start_index, increase_info.end_index, max_cumulative_sum);
     } else {
-
         printf("No valid increase found.\n");
-
     }
 
     return increase_info;
@@ -680,6 +692,12 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
  */
 GradientTrendResult track_gradient_trends_with_quadratic_regression(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor) {
     GradientTrendResult trend_result = {0};  // Initialize the struct with default values
+    
+    printf("track_gradient_trends_with_quadratic_regression called with arguments:\n");
+    printf("  length: %zu\n", length);
+    printf("  start_index: %zu\n", start_index);
+    printf("  window_size: %zu\n", window_size);
+    printf("  forgetting_factor: %.6f\n", forgetting_factor);
 
     // Ensure that the start index and the window size allow for calculations
     if (start_index + window_size > length) {
@@ -710,7 +728,7 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const double
             second_order_gradients[i] = second_order_gradient;
 
             
-            printf("Second-order gradient at index %zu: %.6f\n", current_index, second_order_gradient);
+            //printf("Second-order gradient at index %zu: %.6f\n", current_index, second_order_gradient);
          
         } else {
             second_order_gradients[i] = NAN;  // Not enough points yet to calculate the gradient
@@ -735,3 +753,7 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const double
 
     return trend_result;
 }
+
+//increment ve decrement ortalamasına bakmak lazım. 
+//pattern daha iyi derecelendirilmeli. 
+//tam peak üstündeki drumları incelememiz lazım şimdi. 

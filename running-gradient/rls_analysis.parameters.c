@@ -18,6 +18,8 @@ cubic_rls_analysis_parameters cubic_analysis_params;
  */
 quadratic_rls_analysis_parameters quadratic_analysis_params;
 
+on_peak_analysis_parameters peak_analysis_params;
+
 /**
  * @brief Initializes the cubic RLS analysis parameters.
  *
@@ -56,4 +58,13 @@ void init_quadratic_rls_analysis_parameters(double min_gradient_sum, int max_dec
     quadratic_analysis_params.minimum_second_order_gradient_sum = min_gradient_sum;
     quadratic_analysis_params.max_second_order_trend_decrease_count = max_decrease_count;
     quadratic_analysis_params.max_second_order_trend_increase_count = max_increase_count;
+}
+
+/**
+ * @brief Initializes the on-peak analysis parameters.
+ */
+void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_decrease, size_t min_trend_count) {
+    peak_analysis_params.min_average_increase = min_avg_increase;
+    peak_analysis_params.min_average_decrease = min_avg_decrease;
+    peak_analysis_params.min_consistent_trend_count = min_trend_count;
 }
