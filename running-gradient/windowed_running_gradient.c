@@ -4,19 +4,7 @@
 #include <math.h>
 #include <assert.h>
 #include "windowed_running_gradient.h"
-#include "running_gradient_parameters.h"  // Include the new header file
 
-typedef enum {
-    LEFT_SIDE = -1,
-    RIGHT_SIDE = 1,
-    AROUND_PEAK = 0,
-    UNDECIDED = 2
-} PeakPosition;
-
-typedef struct {
-    bool isPeakFound;
-    PeakPosition position;
-} PeakDetectionResult;
 
 /**
  * @brief Initializes the RunningGradient structure.
@@ -312,148 +300,140 @@ double calculate_probability(RunningGradient *rg) {
     return 0.49;  // Default probability if not enough points
 }
 
+//#define DEBUG_LINEAR_GRADIENT
+
 /**
- * @brief Processes a chunk of data points to the left.
+ * @brief Compares gradients, incremental counts, and probabilities of increase for two parts of the data.
  *
- * This function initializes a RunningGradient structure, processes a chunk of data points,
- * and calculates various statistics, such as left and right increase counts, probability of increasing trend,
- * and whether a potential peak is detected.
- *
- * The function processes data points in reverse order from the actual start index to the left.
- * It discards outlier data points based on the quantile threshold and updates the RunningGradient structure
- * with valid data points. The gradient is calculated for each valid data point, and the increase count is updated
- * based on the gradient thresholds. The function also calculates the probability of an increasing trend
- * and checks if a potential peak is detected.
+ * This function calculates the gradients and probabilities of increase for two consecutive chunks of data (each of 15 points),
+ * compares the total gradient increase, incremental counts, and probabilities, and determines which side has
+ * a stronger increasing trend.
  *
  * @param data The array of data points.
- * @param chunk_size The number of data points in the chunk.
- * @param rg Pointer to the RunningGradient structure.
- * @param actual_start_idx The actual starting index in the data array.
- * @return The analysis result for the processed chunk.
+ * @param start_index The starting index in the data array.
+ * @param forgetting_factor The forgetting factor used in the RLS algorithm.
+ * @return A structure containing the comparison result, including the dominant side and probabilities.
  */
-ChunkAnalysisResult process_chunk_left(
-    const double *data,
-    size_t chunk_size,
-    RunningGradient *rg,
-    size_t actual_start_idx
-) {
-    init_running_gradient(rg);
-    double quantile_thresh = find_upper_quantile(data + actual_start_idx - chunk_size + 1, chunk_size, g_running_gradient_params.quantile_discard);
-    ChunkAnalysisResult result = {0.0, 0, false};
+GradientComparisonResult compare_gradient_parts(const double *data, size_t start_index, double forgetting_factor) {
+    // Initialize the result structure with default values
+    GradientComparisonResult result = {0.0, 0.0, 0, 0, 0.0, 0.0, UNDECIDED};
+    
+    // Initialize RunningGradient structures for the first (right) and second (left) parts
+    RunningGradient rg_right_part;
+    RunningGradient rg_left_part;
 
-    printf("Processing left chunk of size %zu\n", chunk_size);
-    printf("Quantile threshold for discard (left): %f\n", quantile_thresh);
+    init_running_gradient(&rg_right_part);
+    init_running_gradient(&rg_left_part);
 
-    size_t small_decrease_count = 0;
+    size_t middle_index = start_index + 15;  // Middle of the window
 
-    for (size_t i = 0; i < chunk_size; ++i) {
-        size_t actual_idx = actual_start_idx - i;
-        if (data[actual_idx] <= quantile_thresh) {
-            add_data_point(rg, data[actual_idx]);
-            printf("Added data point (left) at index %zu: %f\n", actual_idx, data[actual_idx]);
+    // Process the right side first (from middle_index to middle_index + 15)
+    #ifdef DEBUG_LINEAR_GRADIENT
+    printf("Processing the right side from %zu to %zu...\n", middle_index, middle_index + 15);
+    #endif
 
-            if (rg->num_points > 1) {
-                const double gradient = calculate_gradient(rg);
-                printf("Gradient at index %zu: %f\n", actual_idx, gradient);
+    for (size_t i = 0; i < (WINDOW_SIZE / 2); ++i) {
+        size_t index = middle_index + i;
 
-                if (gradient > g_running_gradient_params.gradient_increase_threshold) {
-                    result.increase_count++;
-                    //printf("Increase detected. Count: %zu\n", result.increase_count);
-                } else if (gradient > g_running_gradient_params.gradient_decrease_threshold) {
-                    small_decrease_count++;
-                    printf("Small decrease ignored at index %zu: %f\n", actual_idx, gradient);
-                    if (small_decrease_count > MAX_SMALL_DECREASE_TREND) {
-                        //break; TODO: DO SOMETHING ABOUT IT
-                    }
-                } else {
-                    small_decrease_count = 0;
-                }
+        #ifdef DEBUG_LINEAR_GRADIENT
+        printf("Adding data point %zu: %f to the right part\n", index, data[index]);
+        #endif
+
+        add_data_point(&rg_right_part, data[index]);
+
+        if (rg_right_part.num_points > 1) {  // Ensure we have enough points to calculate a gradient
+            const double gradient = calculate_gradient(&rg_right_part);
+
+            #ifdef DEBUG_LINEAR_GRADIENT
+            printf("Calculated gradient for right part at index %zu: %f\n", index, gradient);
+            #endif
+
+            result.total_gradient_first_part += gradient;
+
+            if (gradient > 0.1f) { // TODO: HARDCODED. SHOULDNT BE HARDCODED. 
+                result.increase_count_first_part++;
+
+                #ifdef DEBUG_LINEAR_GRADIENT
+                printf("Increase count for right part incremented. Current count: %zu\n", result.increase_count_first_part);
+                #endif
             }
-        } else {
-            printf("Discarded data point (left) at index %zu: %f\n", actual_idx, data[actual_idx]);
         }
     }
 
-    result.prob_increase = calculate_probability(rg);
-    printf("Probability of values increasing (left): %f\n", result.prob_increase);
+    // Calculate the probability of an increasing trend for the right part
+    result.probability_increase_first_part = calculate_probability(&rg_right_part);
 
-    if (rg->coefficients[0] > PEAK_IDENTIFIER_GRADIENT) {
-        result.potential_peak = true;
-        printf("Potential peak detected (left).\n");
-    }
+    #ifdef DEBUG_LINEAR_GRADIENT
+    printf("Probability of increase for the right part: %f\n", result.probability_increase_first_part);
+    #endif
 
-    return result;
-}
+    // Process the left side (from middle_index to middle_index - 15)
+    #ifdef DEBUG_LINEAR_GRADIENT
+    printf("Processing the left side from %zu to %zu...\n", middle_index, middle_index - 15);
+    #endif
 
-/**
- * @brief Processes a chunk of data points to the right.
- *
- * This function initializes a RunningGradient structure, processes a chunk of data points,
- * and calculates various statistics, such as left and right increase counts, probability of increasing trend,
- * and whether a potential peak is detected.
- *
- * The function processes data points in forward order from the actual start index to the right.
- * It discards outlier data points based on the quantile threshold and updates the RunningGradient structure
- * with valid data points. The gradient is calculated for each valid data point, and the increase count is updated
- * based on the gradient thresholds. The function also calculates the probability of an increasing trend
- * and checks if a potential peak is detected.
- *
- * @param data The array of data points.
- * @param chunk_size The number of data points in the chunk.
- * @param rg Pointer to the RunningGradient structure.
- * @param actual_start_idx The actual starting index in the data array.
- * @return The analysis result for the processed chunk.
- */
-ChunkAnalysisResult process_chunk_right(
-    const double *data,
-    size_t chunk_size,
-    RunningGradient *rg,
-    size_t actual_start_idx
-) {
-    init_running_gradient(rg);
-    double quantile_thresh = find_upper_quantile(data + actual_start_idx, chunk_size, g_running_gradient_params.quantile_discard);
-    ChunkAnalysisResult result = {0.0, 0, false};
+    for (size_t i = 0; i < (WINDOW_SIZE / 2); ++i) { // NOT HARDCODED ANYMORE
+        size_t index = middle_index - i;
 
-    printf("Processing right chunk of size %zu\n", chunk_size);
-    printf("Quantile threshold for discard (right): %f\n", quantile_thresh);
+        #ifdef DEBUG_LINEAR_GRADIENT
+        printf("Adding data point %zu: %f to the left part\n", index, data[index]);
+        #endif
 
-    size_t small_decrease_count = 0;
+        add_data_point(&rg_left_part, data[index]);
 
-    for (size_t i = 0; i < chunk_size; ++i) {
-        size_t actual_idx = actual_start_idx + i;
-        if (data[actual_idx] <= quantile_thresh) {
-            add_data_point(rg, data[actual_idx]);
-            printf("Added data point (right) at index %zu: %f\n", actual_idx, data[actual_idx]);
+        if (rg_left_part.num_points > 1) {  // Ensure we have enough points to calculate a gradient
+            const double gradient = calculate_gradient(&rg_left_part);
 
-            if (rg->num_points > 1) {
-                const double gradient = calculate_gradient(rg);
-                printf("Gradient at index %zu: %f\n", actual_idx, gradient);
+            #ifdef DEBUG_LINEAR_GRADIENT
+            printf("Calculated gradient for left part at index %zu: %f\n", index, gradient);
+            #endif
 
-                if (gradient > g_running_gradient_params.gradient_increase_threshold) {
-                    result.increase_count++;
-                    //printf("Increase detected. Count: %zu\n", result.increase_count);
-                } else if (gradient > g_running_gradient_params.gradient_decrease_threshold) {
-                    small_decrease_count++;
-                    printf("Small decrease ignored at index %zu: %f\n", actual_idx, gradient);
-                    if (small_decrease_count > MAX_SMALL_DECREASE_TREND) {
-                        //break; TODO DO SOMETHING ABOUT IT
-                    }
-                } else {
-                    small_decrease_count = 0;
-                }
+            result.total_gradient_second_part += gradient;
+
+            if (gradient > 0.1f) {
+                result.increase_count_second_part++;
+
+                #ifdef DEBUG_LINEAR_GRADIENT
+                printf("Increase count for left part incremented. Current count: %zu\n", result.increase_count_second_part);
+                #endif
             }
-        } else {
-            printf("Discarded data point (right) at index %zu: %f\n", actual_idx, data[actual_idx]);
         }
     }
 
-    result.prob_increase = calculate_probability(rg);
-    printf("Probability of values increasing (right): %f\n", result.prob_increase);
+    // Calculate the probability of an increasing trend for the left part
+    result.probability_increase_second_part = calculate_probability(&rg_left_part);
 
-    if (rg->coefficients[0] > PEAK_IDENTIFIER_GRADIENT) {
-        result.potential_peak = true;
-        printf("Potential peak detected (right).\n");
+    #ifdef DEBUG_LINEAR_GRADIENT
+    printf("Probability of increase for the left part: %f\n", result.probability_increase_second_part);
+    #endif
+
+    // Compare the total gradients and incremental counts to determine the dominant side
+    #ifdef DEBUG_LINEAR_GRADIENT
+    printf("Comparing the results...\n");
+    #endif
+
+    if (result.total_gradient_first_part > result.total_gradient_second_part && 
+        result.increase_count_first_part > result.increase_count_second_part) {
+        result.dominant_side = RIGHT_SIDE;
+
+        #ifdef DEBUG_LINEAR_GRADIENT
+        printf("The right side has a stronger increasing trend.\n");
+        #endif
+    } else if (result.total_gradient_second_part > result.total_gradient_first_part && 
+               result.increase_count_second_part > result.increase_count_first_part) {
+        result.dominant_side = LEFT_SIDE;
+
+        #ifdef DEBUG_LINEAR_GRADIENT
+        printf("The left side has a stronger increasing trend.\n");
+        #endif
+    } else {
+        result.dominant_side = UNDECIDED;
+
+        #ifdef DEBUG_LINEAR_GRADIENT
+        printf("The trend is undecided or similar on both sides.\n");
+        #endif
     }
 
+    // Return the result structure with the calculated values
     return result;
 }

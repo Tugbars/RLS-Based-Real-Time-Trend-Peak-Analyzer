@@ -4,12 +4,11 @@
 #include <math.h>
 #include <assert.h>
 #include <string.h>
-#include "trend_analysis.h"
 #include "windowed_running_gradient.h"
-#include "running_gradient_parameters.h"
 #include "running_quadratic_gradient.h"
+#include "rls_analysis_parameters.h"
 
-#define EXTEND_VALUE 15  // Should depend on the width of the peak where concavity occurs.
+// #define DEBUG_GRADIENT_CALC
 
 /**
  * @brief Structure to store running gradient data for a quadratic model.
@@ -228,27 +227,54 @@ double* compute_second_order_gradients(const double *values, size_t length, size
 		// Add the current value to the running quadratic gradient
 		add_quadratic_data_point(&rg, current_value);
 
+		#ifdef DEBUG_GRADIENT_CALC
 		// Print the current value added
 		printf("Added value: %.6f\n", current_value);
+		#endif
 
 		// Calculate the second-order gradient only if we have at least 3 data points
 		if (rg.num_points >= 3) {
 			double second_order_gradient = calculate_second_order_gradient(&rg);
 			second_order_gradients[i] = second_order_gradient;
 
+			#ifdef DEBUG_GRADIENT_CALC
 			// Print the current second-order gradient
 			printf("Second-order gradient after adding value %.6f: %.6f\n", current_value, second_order_gradient);
+			#endif
 		} else {
 			second_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
 
+			#ifdef DEBUG_GRADIENT_CALC
 			// Print a message indicating insufficient data
 			printf("Not enough data points to calculate the gradient after adding value %.6f.\n", current_value);
+			#endif
 		}
 	}
 
 	return second_order_gradients;
 }
 
+
+/**
+ * @brief Computes the first-order gradients (slopes) for the next 30 values in the given array.
+ *
+ * This function takes an array of doubles and a starting index, then adds each of the next 30 values
+ * to the RunningQuadraticGradient structure. After each addition, it computes the first-order gradient
+ * (slope) of the quadratic model. The function returns an array containing these first-order gradients.
+ *
+ * The function is wrapped with preprocessor directives (`#ifdef DEBUG_GRADIENT_CALC`) that control
+ * whether the internal state and computations are printed for debugging purposes. To enable the debug
+ * output, define the `DEBUG_GRADIENT_CALC` macro before compiling or at the top of your source file.
+ *
+ * @param values Array of double values from which the gradients are computed.
+ * @param length Length of the array.
+ * @param start_index Starting index in the array from which to begin the gradient calculation.
+ * @param forgetting_factor The forgetting factor for the Recursive Least Squares (RLS) algorithm, 
+ *                          typically a value close to 1, which determines the weight given to newer data points.
+ * 
+ * @return An array of doubles containing the first-order gradients, or NULL if there is insufficient data or 
+ *         a memory allocation failure. The caller is responsible for freeing the allocated memory.
+ */
 double* compute_first_order_gradients(const double *values, size_t length, size_t start_index, double forgetting_factor) {
 	// Ensure that the start index and the length allow for 30 calculations
 	if (start_index + RLS_WINDOW > length) {
@@ -274,8 +300,10 @@ double* compute_first_order_gradients(const double *values, size_t length, size_
 		// Add the current value to the running quadratic gradient
 		add_quadratic_data_point(&rg, current_value);
 
+		#ifdef DEBUG_GRADIENT_CALC
 		// Print the current value added
 		printf("Added value: %.6f\n", current_value);
+		#endif
 
 		// Calculate the first-order gradient only if we have at least 3 data points
 		if (rg.num_points >= 2) {
@@ -284,308 +312,21 @@ double* compute_first_order_gradients(const double *values, size_t length, size_
 			double first_order_gradient = calculate_slope_at_point(&rg, x_current);
 			first_order_gradients[i] = first_order_gradient;
 
+			#ifdef DEBUG_GRADIENT_CALC
 			// Print the current first-order gradient
 			printf("First-order gradient after adding value %.6f: %.6f\n", current_value, first_order_gradient);
+			#endif
 		} else {
 			first_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
 
+			#ifdef DEBUG_GRADIENT_CALC
 			// Print a message indicating insufficient data
 			printf("Not enough data points to calculate the gradient after adding value %.6f.\n", current_value);
+			#endif
 		}
 	}
 
 	return first_order_gradients;
-}
-
-/**
- * @brief Structure to store the result of gradient analysis.
- *
- * This structure contains the position relative to the peak and the sum of first-order gradients.
- */
-typedef struct {
-    IndexRelativeToPeak position;
-    double first_order_sum;
-} GradientAnalysisResult;
-
-/**
- * @brief Computes and verifies the gradients to determine the position relative to the peak.
- *
- * This function computes second-order and first-order gradients starting from the `start_index`. 
- * It then determines the position relative to the peak based on the second-order gradients and verifies 
- * this position by summing the first-order gradients.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The starting index for gradient calculations.
- * @param target_index The index whose position relative to the peak is being determined.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return A `GradientAnalysisResult` structure containing the position relative to the peak and the sum of first-order gradients.
- */
-GradientAnalysisResult compute_and_verify_gradients(const double *values, size_t length, size_t start_index, size_t target_index, double forgetting_factor) {
-    GradientAnalysisResult result;
-    result.position = INDEX_POSITION_UNDETERMINED;
-    result.first_order_sum = 0.0;
-
-    // Compute second-order gradients starting from start_index
-    double *second_order_gradients = compute_second_order_gradients(values, length, start_index, forgetting_factor);
-    if (second_order_gradients == NULL) {
-        printf("Failed to compute second-order gradients.\n");
-        return result;
-    }
-
-    // Determine the specific index within the gradient array corresponding to target_index
-    size_t gradient_index = target_index - start_index;
-    double current_second_order_gradient = second_order_gradients[gradient_index];
-
-    // Determine peak position based on second-order gradients
-    if (fabs(current_second_order_gradient) < GRADIENT_THRESHOLD) {
-        result.position = INDEX_AT_PEAK;
-        printf("********Position determined: AT PEAK (Gradient: %.6f)\n", current_second_order_gradient);
-    } else if (current_second_order_gradient > 0) {
-        result.position = INDEX_LEFT_TO_PEAK;
-        printf("*******Position determined: LEFT OF PEAK (Gradient: %.6f)\n", current_second_order_gradient);
-    } else {
-        result.position = INDEX_RIGHT_TO_PEAK;
-        printf("*******Position determined: RIGHT OF PEAK (Gradient: %.6f)\n", current_second_order_gradient);
-    }
-
-    free(second_order_gradients);
-
-    // Compute first-order gradients starting from start_index
-    double *first_order_gradients = compute_first_order_gradients(values, length, start_index, forgetting_factor);
-    if (first_order_gradients == NULL) {
-        printf("Failed to compute first-order gradients.\n");
-        return result;
-    }
-
-    if (result.position == INDEX_LEFT_TO_PEAK) {
-    for (size_t i = 0; i <= gradient_index; ++i) {
-        if (isnan(first_order_gradients[i])) {
-            printf("NaN found in first-order gradient at index %zu, skipping...\n", i);
-            continue;
-        }
-        result.first_order_sum += first_order_gradients[i];
-        printf("Adding first-order gradient %.6f to sum. Current sum: %.6f\n", first_order_gradients[i], result.first_order_sum);
-    }
-    printf("Final sum of first-order gradients on the left side: %.6f\n", result.first_order_sum);
-} else if (result.position == INDEX_RIGHT_TO_PEAK) {
-    for (size_t i = gradient_index; i < RLS_WINDOW; ++i) {
-        if (isnan(first_order_gradients[i])) {
-            printf("NaN found in first-order gradient at index %zu, skipping...\n", i);
-            continue;
-        }
-        result.first_order_sum += first_order_gradients[i];
-        printf("Adding first-order gradient %.6f to sum. Current sum: %.6f\n", first_order_gradients[i], result.first_order_sum);
-    }
-    printf("Final sum of first-order gradients on the right side: %.6f\n", result.first_order_sum);
-}
-
-    free(first_order_gradients);
-
-    return result;
-}
-
-/**
- * @brief Determines the position relative to the peak for a given index.
- *
- * This function determines the position relative to the peak for a specified `target_index` by 
- * computing and verifying the second-order and first-order gradients. The result is based on both the 
- * second-order gradients and the verification process using first-order gradients.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The starting index for gradient calculations.
- * @param target_index The index whose position relative to the peak is being determined.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return An `IndexRelativeToPeak` enum indicating the position relative to the peak (LEFT, RIGHT, AT, or UNDETERMINED).
- */
-IndexRelativeToPeak determine_position_relative_to_peak(const double *values, size_t length, size_t start_index, size_t target_index, double forgetting_factor) {
-    // Ensure the target index is within a valid range considering the RLS window size
-    if (target_index >= length || target_index < start_index || start_index + RLS_WINDOW > length) {
-        printf("Indices out of valid range for RLS_WINDOW size.\n");
-        return INDEX_POSITION_UNDETERMINED;
-    }
-
-    printf("Analyzing gradients and verifying position...\n");
-
-    // Compute and verify gradients
-    GradientAnalysisResult result = compute_and_verify_gradients(values, length, start_index, target_index, forgetting_factor);
-
-    // Final determination based on both first-order and second-order gradients
-    if (result.position == INDEX_AT_PEAK) {
-        printf("Final determination: AT PEAK\n");
-        return INDEX_AT_PEAK;
-    } else if (result.position == INDEX_LEFT_TO_PEAK && result.first_order_sum >= 0) {
-        printf("Final determination: LEFT OF PEAK\n");
-        return INDEX_LEFT_TO_PEAK;
-    } else if (result.position == INDEX_RIGHT_TO_PEAK && result.first_order_sum <= 0) {
-        printf("Final determination: RIGHT OF PEAK\n");
-        return INDEX_RIGHT_TO_PEAK;
-    } else {
-        printf("Final determination: POSITION UNDETERMINED\n");
-        return INDEX_POSITION_UNDETERMINED;
-    }
-}
-
-#define MINIMUM_REQUIRED_TREND_COUNT 5
-
-/**
- * @brief Verifies the detected peak by checking for a consistent trend of increases on the left side
- * and decreases on the right side, with additional checks and adjustments for truncated data.
- *
- * This function verifies whether a detected peak is a true peak by analyzing the second-order gradients.
- * Specifically, it checks for a consistent increasing trend on the left side and a decreasing trend on the right side of the peak.
- * If either side of the peak has insufficient data points (due to reaching the boundaries of the analysis window), 
- * the function attempts to shift the analysis window to obtain more data and re-verifies the trend consistency.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param second_order_gradients Array of second-order gradients corresponding to the data.
- * @param peak_index The index of the detected peak within the second_order_gradients array.
- * @param start_index The starting index in the original data array corresponding to the first element of second_order_gradients.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return bool True if the peak is verified based on the trend analysis, false otherwise.
- *
- * The function follows these steps:
- * 1. **Initial Trend Verification**:
- *    - Counts the number of data points on the left of the peak where the second-order gradient is positive, indicating an increasing trend.
- *    - Counts the number of data points on the right of the peak where the second-order gradient is negative, indicating a decreasing trend.
- *    - If the required number of consistent trends is found on both sides (as defined by `MINIMUM_REQUIRED_TREND_COUNT`), the peak is considered verified.
- * 
- * 2. **Handling Truncated Data**:
- *    - If the left side or right side analysis is truncated (i.e., reaches the boundary of the analysis window), the function attempts to re-verify by shifting the analysis window.
- * 
- * 3. **Re-verification by Expanding the Window**:
- *    - **Left Side Truncation**: If the left side was truncated and the number of increasing trends is insufficient, the function shifts the window 10 points to the left (if possible) and re-analyzes the left side.
- *    - **Right Side Truncation**: If the right side was truncated and the number of decreasing trends is insufficient, the function shifts the window 10 points to the right (if possible) and re-analyzes the right side.
- * 
- * 4. **Final Verification**:
- *    - After the re-verification, if the minimum required trends are found on both sides of the peak, the peak is confirmed as verified.
- *    - If either side fails the trend consistency check even after re-verification, the peak is not considered verified.
- */
-bool verify_peak(const double *values, size_t length, const double *second_order_gradients, size_t peak_index, size_t start_index, double forgetting_factor) {
-    size_t left_trend_count = 0;
-    size_t right_trend_count = 0;
-    bool left_truncated = false;
-    bool right_truncated = false;
-
-    // Count increasing trends on the left side of the peak
-    for (size_t i = peak_index; i > 0; --i) {
-        if (second_order_gradients[i - 1] > 0) {
-            left_trend_count++;
-            if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-        } else {
-            if (i == 1) left_truncated = true;  // If we hit the start of the window
-            break;
-        }
-    }
-
-    // Count decreasing trends on the right side of the peak
-    for (size_t i = peak_index; i < RLS_WINDOW - 1; ++i) {
-        if (second_order_gradients[i + 1] < 0) {
-            right_trend_count++;
-            if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-        } else {
-            if (i == RLS_WINDOW - 2) right_truncated = true;  // If we hit the end of the window
-            break;
-        }
-    }
-
-    printf("Left trends count: %zu, Right trends count: %zu\n", left_trend_count, right_trend_count);
-
-    // If verification was truncated on the left side, attempt to re-verify by shifting the window left
-    if (left_truncated && left_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index >= 10) {
-        printf("Left truncation detected, shifting window 10 points to the left for re-verification...\n");
-        size_t new_start_index = start_index - 10;
-        size_t new_end_index = new_start_index + 20;
-        double *shifted_gradients = compute_second_order_gradients(values, length, new_start_index, forgetting_factor);
-
-        if (shifted_gradients) {
-            // Recount increasing trends on the left side of the peak
-            for (size_t i = 10; i > 0; --i) {
-                if (shifted_gradients[i - 1] > 0) {
-                    left_trend_count++;
-                    if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-                } else {
-                    break;
-                }
-            }
-            free(shifted_gradients);
-        }
-    }
-
-    // If verification was truncated on the right side, attempt to re-verify by shifting the window left
-    if (right_truncated && right_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index + RLS_WINDOW <= length - 10) {
-        printf("Right truncation detected, shifting window 10 points to the left for re-verification...\n");
-        size_t new_start_index = start_index + 10;
-        size_t new_end_index = new_start_index + 20;
-        double *shifted_gradients = compute_second_order_gradients(values, length, new_start_index, forgetting_factor);
-
-        if (shifted_gradients) {
-            // Recount decreasing trends on the right side of the peak
-            for (size_t i = 10; i < 20; ++i) {
-                if (shifted_gradients[i] < 0) {
-                    right_trend_count++;
-                    if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-                } else {
-                    break;
-                }
-            }
-            free(shifted_gradients);
-        }
-    }
-
-    // Verify if the peak meets the criteria
-    return left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT && right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT;
-}
-
-/**
- * @brief Detects and verifies a peak in the data using the second-order gradient sign change.
- *
- * This function computes second-order gradients for a given interval and attempts to detect a peak. 
- * If a peak is found, it verifies whether the peak has the required increasing trend on the left 
- * and decreasing trend on the right. If the verification fails, it continues to search for the 
- * next potential peak.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The start index for computing gradients.
- * @param forgetting_factor The forgetting factor for the RLS algorithm.
- * @return PeakAnalysisResult containing the peak detection status and index.
- */
-PeakAnalysisResult find_and_verify_peak(const double *values, size_t length, size_t start_index, double forgetting_factor) {
-    PeakAnalysisResult result = { .peak_found = false, .peak_index = 0 };
-
-    // Compute second-order gradients starting from start_index
-    double *second_order_gradients = compute_second_order_gradients(values, length, start_index, forgetting_factor);
-    if (second_order_gradients == NULL) {
-        printf("Failed to compute second-order gradients.\n");
-        return result;
-    }
-
-    // Loop through the gradients to find the peak (sign change from positive to negative)
-    for (size_t i = 1; i < RLS_WINDOW; ++i) {
-        if (second_order_gradients[i - 1] > 0 && second_order_gradients[i] < 0) {
-            result.peak_index = start_index + i;
-
-            // Verify the detected peak
-            if (verify_peak(values, length, second_order_gradients, i, start_index, forgetting_factor)) {
-                result.peak_found = true;
-                printf("Verified peak found at index %zu\n", result.peak_index);
-                break;
-            } else {
-                printf("Peak at index %zu did not pass verification. Continuing search...\n", result.peak_index);
-            }
-        }
-    }
-
-    free(second_order_gradients);
-
-    if (!result.peak_found) {
-        printf("No verified peak found in the specified window.\n");
-    }
-
-    return result;
 }
 
 /**
@@ -665,6 +406,18 @@ ConcavityAnalysisResult initial_concavity_analysis(const double *values, size_t 
  * @param isTruePeak Pointer to a boolean that will be set to true if a true peak is detected.
  * @return A `ConcavityPattern` enum value representing the pattern of concavity across the segments.
  */
+/**
+ * @brief Analyzes the behavior of the three segments and returns the corresponding concavity pattern.
+ *
+ * This function checks the sum of second-order gradients for each of the three segments and determines 
+ * the overall pattern of concavity across these segments. It returns an enum value representing the 
+ * pattern identified. It also identifies potential and true peaks.
+ *
+ * @param concavity_result The `ConcavityAnalysisResult` containing the sums of the second-order gradients.
+ * @param isPotentialPeak Pointer to a boolean that will be set to true if a potential peak is detected.
+ * @param isTruePeak Pointer to a boolean that will be set to true if a true peak is detected.
+ * @return A `ConcavityPattern` enum value representing the pattern of concavity across the segments.
+ */
 ConcavityPattern analyze_concavity_segments(const ConcavityAnalysisResult *concavity_result, bool *isPotentialPeak, bool *isTruePeak) {
     if (isnan(concavity_result->sums[0]) || isnan(concavity_result->sums[1]) || isnan(concavity_result->sums[2])) {
         printf("Insufficient data for determining concavity pattern.\n");
@@ -676,83 +429,309 @@ ConcavityPattern analyze_concavity_segments(const ConcavityAnalysisResult *conca
     *isPotentialPeak = false;
     *isTruePeak = false;
 
-    // Map increase (> 0.3) to 1 and decrease (<= 0.3) to 0
-    int first_segment = concavity_result->sums[0] > 0.3 ? 1 : 0;
-    int second_segment = concavity_result->sums[1] > 0.3 ? 1 : 0;
-    int third_segment = concavity_result->sums[2] > 0.3 ? 1 : 0;
+    // Define thresholds for categorizing the gradient sums
+    double increase_threshold = quadratic_analysis_params.minimum_second_order_gradient_sum;
+    double small_increase_threshold = 0.0;
 
-    // Create a binary pattern based on the segments
-    int pattern = (first_segment << 2) | (second_segment << 1) | third_segment;
+    // Map to 2 (increase), 1 (small increase), or 0 (decrease)
+    int first_segment = concavity_result->sums[0] > increase_threshold ? 2 :
+                        (concavity_result->sums[0] > small_increase_threshold ? 1 : 0);
+    int second_segment = concavity_result->sums[1] > increase_threshold ? 2 :
+                         (concavity_result->sums[1] > small_increase_threshold ? 1 : 0);
+    int third_segment = concavity_result->sums[2] > increase_threshold ? 2 :
+                        (concavity_result->sums[2] > small_increase_threshold ? 1 : 0);
+                        
+    printf("%d %d %d\n", first_segment, second_segment, third_segment);
 
-    // Switch on the binary pattern to determine the concavity pattern
+    // Create a ternary pattern based on the segments (using 2 as increase, 1 as small increase, 0 as decrease)
+    int pattern = (first_segment * 9) + (second_segment * 3) + third_segment;
+
+    // Switch on the ternary pattern to determine the concavity pattern
     switch (pattern) {
-        case 0b110: // 6: INCREASE, INCREASE, DECREASE
+        case 25: // 2, 2, 1: INCREASE, INCREASE, SMALL INCREASE
+        case 24: // 2, 2, 0: INCREASE, INCREASE, DECREASE
             *isPotentialPeak = true;
             return INCREASE_INCREASE_DECREASE;
-        case 0b101: // 5: INCREASE, DECREASE, INCREASE
+        case 23: // 2, 1, 2: INCREASE, SMALL INCREASE, INCREASE
+        case 22: // 2, 1, 1: INCREASE, SMALL INCREASE, SMALL INCREASE
+        case 21: // 2, 1, 0: INCREASE, SMALL INCREASE, DECREASE
+        case 20: // 2, 0, 2: INCREASE, DECREASE, INCREASE
             *isPotentialPeak = true;
             return INCREASE_DECREASE_INCREASE;
-        case 0b100: // 4: INCREASE, DECREASE, DECREASE
+        case 18: // 2, 0, 0: INCREASE, DECREASE, DECREASE
             *isPotentialPeak = true;
             *isTruePeak = true;
             return INCREASE_DECREASE_DECREASE;
-        case 0b011: // 3: DECREASE, INCREASE, INCREASE
+        case 14: // 1, 2, 2: SMALL INCREASE, INCREASE, INCREASE
             return DECREASE_INCREASE_INCREASE;
-        case 0b010: // 2: DECREASE, INCREASE, DECREASE
+        case 11: // 1, 0, 2: SMALL INCREASE, DECREASE, INCREASE
+        case 9:  // 0, 2, 2: DECREASE, INCREASE, INCREASE
+            return DECREASE_INCREASE_INCREASE;
+        case 10: // 1, 0, 0: SMALL INCREASE, DECREASE, DECREASE
+        case 7:  // 0, 2, 0: DECREASE, INCREASE, DECREASE
             *isPotentialPeak = true;
             return DECREASE_INCREASE_DECREASE;
-        case 0b001: // 1: DECREASE, DECREASE, INCREASE
+        case 4:  // 0, 0, 2: DECREASE, DECREASE, INCREASE
             return DECREASE_DECREASE_INCREASE;
-        case 0b000: // 0: DECREASE, DECREASE, DECREASE
+        case 0:  // 0, 0, 0: DECREASE, DECREASE, DECREASE
             *isTruePeak = true;
             return DECREASE_DECREASE_DECREASE;
+        case 26: // 2, 2, 2: INCREASE, INCREASE, INCREASE
+            return INCREASE_INCREASE_INCREASE;
         default:
             return UNDETERMINED_PATTERN;
     }
 }
 
 /**
- * @brief Iteratively moves the RLS window by 10 items to find a true peak.
+ * @brief Finds a consistent increasing trend in the second-order gradient array.
  *
- * This function starts with an initial RLS window and moves it by 10 items until a true peak is found.
- * At each step, it performs an initial concavity analysis and checks for the presence of a true peak.
- * The function returns the starting index of the search and the end index where the true peak was found.
+ * This function scans through an array of second-order gradient values to identify a consistent increasing trend.
+ * It starts tracking when positive gradients are encountered and stops if more than one negative gradient is found consecutively.
+ * The function returns a `GradientTrendIndices` struct containing the start and end indices of the consistent increase, 
+ * a validity flag, and the cumulative sum of the gradients within this range.
  *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The initial starting index for gradient calculations.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @param reinitialize_after_each_segment Boolean flag to control whether to re-initialize after every 10 data points.
- * @param start_idx Pointer to store the initial starting index of the search.
- * @param end_idx Pointer to store the ending index where the true peak was found.
- * @return bool True if a true peak was found, false otherwise.
+ * @param gradients The array of second-order gradient values to analyze.
+ * @param start_index The starting index in the original data array from which the gradient array begins.
+ * @param window_size The number of elements in the gradient array to analyze.
+ * @return GradientTrendIndices A structure containing the start index, end index, validity, and maximum sum of the consistent increasing trend.
  */
-bool find_true_peak_with_concavity_analysis(const double *values, size_t length, size_t start_index, double forgetting_factor, bool reinitialize_after_each_segment, size_t *start_idx, size_t *end_idx) {
-    *start_idx = start_index;
-    bool isPotentialPeak = false;
-    bool isTruePeak = false;
+GradientTrendIndices find_consistent_increase_in_second_order(double *gradients, size_t start_index, size_t window_size) { //has no restart function. 
+    GradientTrendIndices increase_info = {0, 0, false, 0.0};
+    bool tracking_increase = false;
+    double cumulative_sum = 0.0;
+    int decrease_count = 0;
 
-    while (start_index + RLS_WINDOW <= length) {
-        // Perform initial concavity analysis
-        ConcavityAnalysisResult concavity_result = initial_concavity_analysis(values, length, start_index, forgetting_factor, reinitialize_after_each_segment);
+    #ifdef DEBUG
+    printf("Starting find_consistent_increase_in_second_order with start_index: %zu, window_size: %zu\n", start_index, window_size);
+    #endif
 
-        // Analyze the concavity segments
-        ConcavityPattern pattern = analyze_concavity_segments(&concavity_result, &isPotentialPeak, &isTruePeak);
+    for (size_t i = 0; i < window_size; ++i) {
+        double gradient = gradients[i];
 
-        // Check if a true peak was found
-        if (isTruePeak) {
-            *end_idx = start_index + RLS_WINDOW - 1;
-            printf("True peak found between indices %zu and %zu with pattern: %d\n", *start_idx, *end_idx, pattern);
-            return true;
+        #ifdef DEBUG
+        printf("Index: %zu, Gradient: %.6f\n", start_index + i, gradient);
+        #endif
+
+        if (gradient > 0) {  // If the current gradient is positive
+            if (!tracking_increase) {
+                // Start tracking the increase
+                increase_info.start_index = start_index + i;
+                tracking_increase = true;
+                cumulative_sum = 0.0;  // Reset cumulative sum when starting to track
+
+                #ifdef DEBUG
+                printf("Started tracking increase at index %zu\n", start_index + i);
+                #endif
+            }
+            increase_info.end_index = start_index + i;
+            cumulative_sum += gradient;
+            decrease_count = 0;  // Reset decrease counter on positive gradient
+
+            #ifdef DEBUG
+            printf("Continuing tracking increase: Updated end_index to %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
+            #endif
+        } else if (gradient < 0) {  // If the current gradient is negative
+            decrease_count++;
+
+            #ifdef DEBUG
+            printf("Negative gradient found, Decrease Count: %d\n", decrease_count);
+            #endif
+
+            if (decrease_count > quadratic_analysis_params.max_second_order_trend_decrease_count) {  // Use global parameter
+                tracking_increase = false;  // Stop tracking but do not discard the tracked increase
+
+                #ifdef DEBUG
+                printf("Stopped tracking increase due to consecutive decreases at index %zu\n", start_index + i);
+                #endif
+                break;
+            }
         }
-
-        // Move the start index by 10 for the next window
-        start_index += 10;
     }
 
-    // No true peak was found
-    *end_idx = start_index + RLS_WINDOW - 1;
-    printf("No true peak found after examining all possible windows.\n");
-    return false;
+    if (cumulative_sum > 0) {
+        increase_info.valid = true;
+        increase_info.max_sum = cumulative_sum;
+
+        printf("Valid increase found from index %zu to %zu with max sum %.6f\n", increase_info.start_index, increase_info.end_index, cumulative_sum);
+
+    } else {
+
+        printf("No valid increase found.\n");
+
+    }
+
+    return increase_info;
 }
 
+/**
+ * @brief Finds a consistent decreasing trend in the second-order gradient array.
+ *
+ * This function scans through an array of second-order gradient values to identify a consistent decreasing trend.
+ * It starts tracking when negative gradients are encountered and stops if more than one positive gradient is found consecutively.
+ * The function returns a `GradientTrendIndices` struct containing the start and end indices of the consistent decrease, 
+ * a validity flag, and the cumulative sum of the gradients within this range.
+ *
+ * @param gradients The array of second-order gradient values to analyze.
+ * @param start_index The starting index in the original data array from which the gradient array begins.
+ * @param window_size The number of elements in the gradient array to analyze.
+ * @return GradientTrendIndices A structure containing the start index, end index, validity, and maximum sum of the consistent decreasing trend.
+ */
+GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients, size_t start_index, size_t window_size) {
+    GradientTrendIndices decrease_info = {0, 0, false, 0.0};
+    bool tracking_decrease = false;
+    double cumulative_sum = 0.0;
+    int increase_count = 0;
+
+    #ifdef DEBUG
+    printf("Starting find_consistent_decrease_in_second_order with start_index: %zu, window_size: %zu\n", start_index, window_size);
+    #endif
+
+    for (size_t i = 0; i < window_size; ++i) {
+        double gradient = gradients[i];
+
+        #ifdef DEBUG
+        printf("Index: %zu, Gradient: %.6f\n", start_index + i, gradient);
+        #endif
+
+        if (gradient < 0) {  // If the current gradient is negative
+            if (!tracking_decrease) {
+                // Start tracking the decrease
+                decrease_info.start_index = start_index + i;
+                tracking_decrease = true;
+                cumulative_sum = 0.0;  // Reset cumulative sum when starting to track
+
+                #ifdef DEBUG
+                printf("Started tracking decrease at index %zu\n", start_index + i);
+                #endif
+            }
+            decrease_info.end_index = start_index + i;
+            cumulative_sum += gradient;
+            increase_count = 0;  // Reset increase counter on negative gradient
+
+            #ifdef DEBUG
+            printf("Continuing tracking decrease: Updated end_index to %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
+            #endif
+        } else if (gradient > 0) {  // If the current gradient is positive
+            increase_count++;
+
+            #ifdef DEBUG
+            printf("Positive gradient found, Increase Count: %d\n", increase_count);
+            #endif
+
+            if (increase_count > quadratic_analysis_params.max_second_order_trend_increase_count) {  // Use global parameter
+                tracking_decrease = false;  // Stop tracking
+
+                #ifdef DEBUG
+                printf("Stopped tracking decrease due to consecutive increases at index %zu\n", start_index + i);
+                #endif
+                break;
+            }
+        }
+
+        // If tracking was stopped due to increases and a new decrease is found
+        if (!tracking_decrease && gradient < 0 && increase_count > quadratic_analysis_params.max_second_order_trend_increase_count) {
+            // Restart tracking from this new decrease
+            decrease_info.start_index = start_index + i;
+            tracking_decrease = true;
+            cumulative_sum = gradient;  // Reset cumulative sum with the new decrease
+            decrease_info.end_index = start_index + i;
+            increase_count = 0;  // Reset the increase counter
+
+            #ifdef DEBUG
+            printf("Restarted tracking decrease at index %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
+            #endif
+        }
+    }
+
+    if (cumulative_sum < 0) {  // Ensure there's a valid decrease before marking it valid
+        decrease_info.valid = true;
+        decrease_info.max_sum = cumulative_sum;
+
+       
+        printf("Valid decrease found from index %zu to %zu with max sum %.6f\n", decrease_info.start_index, decrease_info.end_index, cumulative_sum);
+
+    } else {
+
+        printf("No valid decrease found.\n");
+
+    }
+
+    return decrease_info;
+}
+
+/**
+ * @brief Tracks the second-order gradient trends within a specified window using quadratic regression.
+ *
+ * This function tracks the gradient trends of a given dataset within a specified window using quadratic regression.
+ * It calculates second-order gradients (curvatures) at each point in the window, identifies regions of consistent increase,
+ * and stores the maximum cumulative sum of gradients. It returns a structure containing the start and end indices
+ * of the consistent increase, along with a flag indicating if the trend was valid and the maximum sum of gradients.
+ *
+ * @param values Array of double values representing the data points.
+ * @param length The length of the values array.
+ * @param start_index The starting index in the values array from which to begin the gradient calculation.
+ * @param window_size The number of points to include in the gradient calculation.
+ * @param forgetting_factor The forgetting factor used in the Recursive Least Squares (RLS) algorithm, typically close to 1,
+ *        which determines the weight given to newer data points.
+ * @return GradientTrendResult A struct containing:
+ * - increase_info: Information about the detected increasing trend.
+ * - decrease_info: Information about the detected decreasing trend.
+ */
+GradientTrendResult track_gradient_trends_with_quadratic_regression(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor) {
+    GradientTrendResult trend_result = {0};  // Initialize the struct with default values
+
+    // Ensure that the start index and the window size allow for calculations
+    if (start_index + window_size > length) {
+        #ifdef DEBUG
+        printf("Insufficient data to compute gradients for the specified window size.\n");
+        #endif
+        return trend_result;
+    }
+
+    // Array to store the second-order gradients
+    double second_order_gradients[window_size];
+
+    // Initialize the running quadratic gradient structure
+    RunningQuadraticGradient rg;
+    init_running_quadratic_gradient(&rg, forgetting_factor);
+
+    // Loop through the specified window size and calculate second-order gradients
+    for (size_t i = 0; i < window_size; ++i) {
+        size_t current_index = start_index + i;
+        double current_value = values[current_index];
+
+        // Add the current value to the running quadratic gradient
+        add_quadratic_data_point(&rg, current_value);
+
+        // Check if we have enough points to calculate the gradient
+        if (rg.num_points >= 3) {
+            double second_order_gradient = calculate_second_order_gradient(&rg);
+            second_order_gradients[i] = second_order_gradient;
+
+            
+            printf("Second-order gradient at index %zu: %.6f\n", current_index, second_order_gradient);
+         
+        } else {
+            second_order_gradients[i] = NAN;  // Not enough points yet to calculate the gradient
+
+            #ifdef DEBUG
+            printf("Not enough data points to calculate the gradient at index %zu\n", current_index);
+            #endif
+        }
+    }
+
+    // Find the consistent increase trend
+    #ifdef DEBUG
+    printf("Finding consistent increase...\n");
+    #endif
+    trend_result.increase_info = find_consistent_increase_in_second_order(second_order_gradients, start_index, window_size);
+
+    // Find the consistent decrease trend
+    #ifdef DEBUG
+    printf("Finding consistent decrease...\n");
+    #endif
+    trend_result.decrease_info = find_consistent_decrease_in_second_order(second_order_gradients, start_index, window_size);
+
+    return trend_result;
+}
