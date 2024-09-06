@@ -1,14 +1,12 @@
-// rls_analysis_parameters.h
-
 #ifndef RLS_ANALYSIS_PARAMETERS_H
 #define RLS_ANALYSIS_PARAMETERS_H
 
-#include <stddef.h>
+#include <stdint.h>  // Include for uint16_t
 
 // Struct to hold parameters for cubic RLS analysis
 typedef struct {
     double significance_threshold;
-    size_t duration_threshold;
+    uint16_t duration_threshold;
     int minimum_required_cubic_trend_count;
     int max_third_order_trend_decrease_count;
     int max_third_order_trend_increase_count;
@@ -23,23 +21,32 @@ typedef struct {
 
 // Struct to hold parameters for peak analysis
 typedef struct {
-    double min_average_increase;    // Minimum average increase required to consider a significant trend
-    double min_average_decrease;    // Minimum average decrease required to consider a significant trend
-    size_t min_consistent_trend_count;  // Minimum number of data points for a consistent trend
+    double min_average_increase;         // Minimum average increase required to consider a significant trend
+    double min_average_decrease;         // Minimum average decrease required to consider a significant trend
+    uint16_t min_consistent_trend_count; // Minimum number of data points for a consistent trend
 } on_peak_analysis_parameters;
+
+// Struct to hold parameters for gradient analysis
+typedef struct {
+    double gradient_threshold;         // Threshold for gradient detection during analysis
+    double minimum_gradient_total;     // Minimum total gradient required to flag significant trends
+} GradientAnalysisParams;
 
 // Declare the global variables for the parameters
 extern cubic_rls_analysis_parameters cubic_analysis_params;
 extern quadratic_rls_analysis_parameters quadratic_analysis_params;
 extern on_peak_analysis_parameters peak_analysis_params;
+extern GradientAnalysisParams gradient_analysis_params;
 
 // Function to initialize the cubic RLS analysis parameters
-void init_cubic_rls_analysis_parameters(double significance_thresh, size_t duration_thresh, size_t min_trend_count, int max_decrease_count, int max_increase_count);
+void init_cubic_rls_analysis_parameters(double significance_thresh, uint16_t duration_thresh, uint16_t min_trend_count, int max_decrease_count, int max_increase_count);
 
 // Function to initialize the quadratic RLS analysis parameters
 void init_quadratic_rls_analysis_parameters(double min_gradient_sum, int max_decrease_count, int max_increase_count);
 
 // Function to initialize the on-peak analysis parameters
-void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_decrease, size_t min_trend_count);
+void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_decrease, uint16_t min_trend_count);
+
+void init_gradient_analysis_params(double gradient_thresh, double min_gradient_total);
 
 #endif // RLS_ANALYSIS_PARAMETERS_H

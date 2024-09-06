@@ -1,4 +1,5 @@
 #include "rls_analysis_parameters.h"
+#include <stdint.h> // Include this to ensure uint16_t is defined
 
 /**
  * @brief Global variable to store the parameters for cubic RLS analysis.
@@ -18,7 +19,20 @@ cubic_rls_analysis_parameters cubic_analysis_params;
  */
 quadratic_rls_analysis_parameters quadratic_analysis_params;
 
+
+/**
+ * @brief Global variable to store the parameters for peak analysis.
+ */
 on_peak_analysis_parameters peak_analysis_params;
+
+
+/**
+ * @brief Global variable to store the gradient analysis parameters.
+ *
+ * This variable holds the configuration parameters for gradient thresholding during analysis.
+ * It determines the thresholds for increase detection and minimum total gradient required to flag significant trends.
+ */
+GradientAnalysisParams gradient_analysis_params;
 
 /**
  * @brief Initializes the cubic RLS analysis parameters.
@@ -33,7 +47,7 @@ on_peak_analysis_parameters peak_analysis_params;
  * @param min_trend_count The minimum number of consistent trends required for analysis.
  *                        This helps in filtering out noise and minor fluctuations.
  */
-void init_cubic_rls_analysis_parameters(double significance_thresh, size_t duration_thresh, size_t min_trend_count, int max_decrease_count, int max_increase_count) {
+void init_cubic_rls_analysis_parameters(double significance_thresh, uint16_t duration_thresh, uint16_t min_trend_count, int max_decrease_count, int max_increase_count) {
     cubic_analysis_params.significance_threshold = significance_thresh;
     cubic_analysis_params.duration_threshold = duration_thresh;
     cubic_analysis_params.minimum_required_cubic_trend_count = min_trend_count;
@@ -63,8 +77,20 @@ void init_quadratic_rls_analysis_parameters(double min_gradient_sum, int max_dec
 /**
  * @brief Initializes the on-peak analysis parameters.
  */
-void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_decrease, size_t min_trend_count) {
+void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_decrease, uint16_t min_trend_count) {
     peak_analysis_params.min_average_increase = min_avg_increase;
     peak_analysis_params.min_average_decrease = min_avg_decrease;
     peak_analysis_params.min_consistent_trend_count = min_trend_count;
+}
+
+
+/**
+ * @brief Initializes the parameters for gradient analysis.
+ *
+ * @param gradient_thresh The threshold for the gradient to consider a significant trend.
+ * @param min_gradient_total The minimum total gradient required to flag a significant trend.
+ */
+void init_gradient_analysis_params(double gradient_thresh, double min_gradient_total) {
+    gradient_analysis_params.gradient_threshold = gradient_thresh;
+    gradient_analysis_params.minimum_gradient_total = min_gradient_total;
 }

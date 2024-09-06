@@ -1,7 +1,9 @@
 #ifndef RUNNING_CUBIC_GRADIENT_H
 #define RUNNING_CUBIC_GRADIENT_H
 
-#include <stddef.h>  // For size_t
+#include <stdint.h>  // For uint16_t
+#include "mqs_def.h"
+#include <stdbool.h>
 
 // Define the window size for the cubic RLS
 #define CUBIC_RLS_WINDOW 30
@@ -14,8 +16,8 @@
  * the index of that peak within the analyzed data.
  */
 typedef struct {
-    bool peak_found;     /**< Indicates if a peak was found during analysis. */
-    size_t peak_index;   /**< The index of the detected peak within the data array. */
+    bool peak_found;       /**< Indicates if a peak was found during analysis. */
+    uint16_t peak_index;   /**< The index of the detected peak within the data array. */
 } CubicPeakAnalysisResult;
 
 /**
@@ -32,8 +34,8 @@ typedef struct {
     double y[CUBIC_RLS_WINDOW];           /**< Array to store y values used in the regression. */
     double x[CUBIC_RLS_WINDOW];           /**< Array to store x values used in the regression. */
     double residual_sum_squares;          /**< The sum of squared residuals for the regression model. */
-    size_t num_points;                    /**< The number of data points currently in the window. */
-    size_t max_points;                    /**< The maximum number of points allowed in the window (usually CUBIC_RLS_WINDOW). */
+    uint16_t num_points;                  /**< The number of data points currently in the window. */
+    uint16_t max_points;                  /**< The maximum number of points allowed in the window (usually CUBIC_RLS_WINDOW). */
 } RunningCubicGradient;
 
 /**
@@ -44,8 +46,8 @@ typedef struct {
  * and the maximum cumulative sum of the gradients within this range.
  */
 typedef struct {
-    size_t start_index;    /**< The starting index of the detected trend in the data array. */
-    size_t end_index;      /**< The ending index of the detected trend in the data array. */
+    uint16_t start_index;  /**< The starting index of the detected trend in the data array. */
+    uint16_t end_index;    /**< The ending index of the detected trend in the data array. */
     bool valid;            /**< A flag indicating whether the detected trend is valid. */
     double max_sum;        /**< The maximum cumulative sum of the gradients within the detected trend. */
 } GradientTrendIndices;
@@ -75,14 +77,14 @@ typedef struct {
     GradientTrendIndices decrease_info;      /**< Detailed information about the significant decreasing trend. */
 } PeakTrendAnalysisResult;
 
-void compute_cubic_second_order_gradients(double *second_order_gradients, const double *values, size_t length, size_t start_index, double forgetting_factor);
+void compute_cubic_second_order_gradients(double *second_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
 
-CubicPeakAnalysisResult find_and_verify_cubic_peak(const double *values, size_t length, size_t start_index, double forgetting_factor);
+CubicPeakAnalysisResult find_and_verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
 
-void compute_cubic_first_order_gradients(double *first_order_gradients, const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor);
+void compute_cubic_first_order_gradients(double *first_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor);
 
-GradientTrendResult track_gradient_trends_with_cubic_regression(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor);
+GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor);
 
-PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor);
+PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor);
 
 #endif // RUNNING_CUBIC_GRADIENT_H

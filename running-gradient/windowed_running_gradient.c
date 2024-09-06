@@ -4,6 +4,7 @@
 #include <math.h>
 #include <assert.h>
 #include "windowed_running_gradient.h"
+#include "rls_analysis_parameters.h"
 
 
 /**
@@ -26,7 +27,7 @@ void init_running_gradient(RunningGradient *rg) {
     rg->inverse_cov_matrix[1][1] = 1e9;
     rg->forgetting_factor = FORGETTING_FACTOR;
 
-    for (size_t i = 0; i < WINDOW_SIZE; ++i) {
+    for (uint16_t i = 0; i < WINDOW_SIZE; ++i) {
         rg->x[i] = (double)i; // Pre-fill x values for the window
         rg->y[i] = 0.0; // Initialize y values to 0
     }
@@ -45,13 +46,13 @@ void init_running_gradient(RunningGradient *rg) {
  * @param pivotIndex The pivot index around which partitioning is done.
  * @return The index of the pivot after partitioning.
  */
-static inline size_t partition(double* arr, size_t left, size_t right, size_t pivotIndex) {
+static inline uint16_t partition(double* arr, uint16_t left, uint16_t right, uint16_t pivotIndex) {
     double pivotValue = arr[pivotIndex];
     double temp = arr[pivotIndex];
     arr[pivotIndex] = arr[right];
     arr[right] = temp;  // Move pivot to end
-    size_t storeIndex = left;
-    for (size_t i = left; i < right; i++) {
+    uint16_t storeIndex = left;
+    for (uint16_t i = left; i < right; i++) {
         if (arr[i] < pivotValue) {
             temp = arr[i];
             arr[i] = arr[storeIndex];
@@ -77,11 +78,11 @@ static inline size_t partition(double* arr, size_t left, size_t right, size_t pi
  * @param k The index of the k-th smallest element to find.
  * @return The k-th smallest element in the array.
  */
-static inline double quickselect(double* arr, size_t left, size_t right, size_t k) {
+static inline double quickselect(double* arr, uint16_t left, uint16_t right, uint16_t k) {
     if (left == right) {
         return arr[left];  // If the list contains only one element, return that element
     }
-    size_t pivotIndex = left + (right - left) / 2;
+    uint16_t pivotIndex = left + (right - left) / 2;
     pivotIndex = partition(arr, left, right, pivotIndex);
     if (k == pivotIndex) {
         return arr[k];
@@ -101,7 +102,7 @@ static inline double quickselect(double* arr, size_t left, size_t right, size_t 
  *
  * The Recursive Least Squares (RLS) algorithm updates the coefficients of the linear regression model by incorporating
  * new data points one at a time. It is a form of adaptive filter that adjusts the model parameters to minimize the 
- * prediction error. The inverse covariance matrix is used to calculate the adjustment to the coefficients.
+ * prediction error. The inverse covariance matrix is used to _probabili the adjustment to the coefficients.
  *
  * RLS is particularly suitable for running gradient calculations because it efficiently updates the model parameters
  * without the need to reprocess all previous data points. This is essential for real-time applications where data is
@@ -110,7 +111,10 @@ static inline double quickselect(double* arr, size_t left, size_t right, size_t 
  * @param rg Pointer to the RunningGradient structure.
  * @param y The new data point value.
  */
-void add_data_point(RunningGradient *const rg, const double y) {
+void add_data_point(RunningGradient *const rg, const MqsRawDataPoint_t *data_point) {
+    // Extract the phase angle from the data point
+    double y = data_point->phaseAngle;
+
     // Check if the current window is not full
     if (rg->num_points < rg->max_points) {
         // Add new data point to the window
@@ -119,7 +123,7 @@ void add_data_point(RunningGradient *const rg, const double y) {
         rg->num_points++;
     } else {
         // Shift the window to the left and add new data point
-        for (size_t i = 0; i < rg->max_points - 1; ++i) {
+        for (uint16_t i = 0; i < rg->max_points - 1; ++i) {
             rg->y[i] = rg->y[i + 1];
             rg->x[i] = rg->x[i + 1];
         }
@@ -161,7 +165,7 @@ void add_data_point(RunningGradient *const rg, const double y) {
 
     // Recalculate the residual sum of squares
     rg->residual_sum_squares = 0.0;
-    for (size_t i = 0; i < rg->num_points; ++i) {
+    for (uint16_t i = 0; i < rg->num_points; ++i) {
         const double error = rg->y[i] - (rg->coefficients[0] * rg->x[i] + rg->coefficients[1]);
         rg->residual_sum_squares += error * error;
     }
@@ -264,7 +268,7 @@ double probability_gradient_greater_than(const RunningGradient * const rg, const
  * @param quantile The quantile to find (must be in the range [0, 1]).
  * @return The value such that quantile percent of the values are greater than it.
  */
-double find_upper_quantile(const double * const data, const size_t size, const double quantile) {
+double find_upper_quantile(const double * const data, const uint16_t size, const double quantile) {
     assert(0 <= quantile && quantile <= 1.0 && "quantile must be in the range [0, 1]");
     assert(size > 0 && "The container must contain more than 0 elements.");
 
@@ -273,11 +277,11 @@ double find_upper_quantile(const double * const data, const size_t size, const d
         fprintf(stderr, "Memory allocation failed\n");
         exit(EXIT_FAILURE);
     }
-    for (size_t i = 0; i < size; ++i) {
+    for (uint16_t i = 0; i < size; ++i) {
         sorted_data[i] = data[i];
     }
 
-    const size_t idx_upper = (size_t)round((size - 1) * (1 - quantile));
+    const uint16_t idx_upper = (uint16_t)round((size - 1) * (1 - quantile));
     const double upper_q = quickselect(sorted_data, 0, size - 1, idx_upper);
 
     free(sorted_data);
@@ -303,137 +307,122 @@ double calculate_probability(RunningGradient *rg) {
 //#define DEBUG_LINEAR_GRADIENT
 
 /**
- * @brief Compares gradients, incremental counts, and probabilities of increase for two parts of the data.
+ * @brief Processes the gradient for a part of the window (left or right).
  *
- * This function calculates the gradients and probabilities of increase for two consecutive chunks of data (each of 15 points),
- * compares the total gradient increase, incremental counts, and probabilities, and determines which side has
- * a stronger increasing trend.
+ * This function adds data points to the running gradient, calculates the gradient for each point,
+ * and updates the total gradient and the count of increasing gradients based on the globally configured threshold.
  *
- * @param data The array of data points.
- * @param start_index The starting index in the data array.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return A structure containing the comparison result, including the dominant side and probabilities.
+ * @param rg Pointer to the RunningGradient structure.
+ * @param data Pointer to the array of MqsRawDataPoint_t containing the data points.
+ * @param start_index The starting index for processing data points.
+ * @param end_index The ending index for processing data points.
+ * @param total_gradient Pointer to the variable storing the total gradient for this part.
+ * @param increase_count Pointer to the variable storing the count of increases in this part.
  */
-GradientComparisonResult compare_gradient_parts(const double *data, size_t start_index, double forgetting_factor) {
-    // Initialize the result structure with default values
+void process_gradient(RunningGradient *rg, const MqsRawDataPoint_t *data, uint16_t start_index, uint16_t end_index, 
+                      double *total_gradient, uint16_t *increase_count) {
+    for (uint16_t i = start_index; i < end_index; ++i) {
+        add_data_point(rg, &data[i]);
+
+        if (rg->num_points > 1) {  // Ensure we have enough points to calculate a gradient
+            double gradient = calculate_gradient(rg);
+            *total_gradient += gradient;
+
+            if (gradient > gradient_analysis_params.gradient_threshold) {  // Use globally defined threshold
+                (*increase_count)++;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Compares the total gradients and incremental counts to determine the dominant side.
+ *
+ * This function evaluates the total gradients and increase counts for both parts of the window (left and right)
+ * to determine which side has the stronger trend, either increasing or decreasing. If both sides have gradients
+ * that do not meet the minimum threshold, the result will be set as UNDECIDED.
+ *
+ * @param result Pointer to the GradientComparisonResult structure containing the gradient comparison data.
+ * @return PeakPosition indicating whether the left side, right side, or neither side (undecided) has a dominant trend.
+ */
+PeakPosition determine_dominant_side(const GradientComparisonResult *result) {
+    double min_total = gradient_analysis_params.minimum_gradient_total;
+
+    // Check if both gradients are insignificant
+    if ((result->total_gradient_first_part > -min_total && result->total_gradient_first_part < min_total) &&
+        (result->total_gradient_second_part > -min_total && result->total_gradient_second_part < min_total)) {
+        return UNDECIDED;  // Both sides have insignificant gradients
+    }
+
+    // Check for dominant increase
+    if (result->increase_count_first_part > result->increase_count_second_part) {
+        return LEFT_SIDE;  // Left side has a stronger increase
+    }
+    if (result->increase_count_second_part > result->increase_count_first_part) {
+        return RIGHT_SIDE;  // Right side has a stronger increase
+    }
+
+    // Check for decreases if no dominant increase
+    if (result->total_gradient_first_part < result->total_gradient_second_part) {
+        return RIGHT_SIDE;  // Right side has a stronger decrease
+    }
+    if (result->total_gradient_second_part < result->total_gradient_first_part) {
+        return LEFT_SIDE;   // Left side has a stronger decrease
+    }
+
+    return UNDECIDED;  // No clear dominant side
+}
+
+/**
+ * @brief Compares the gradient trends between two parts of the window (left and right) to determine the dominant side.
+ *
+ * This function processes the gradients for the left and right sides of the window, calculates the total gradients and 
+ * increase counts, and compares them to determine whether the left side, right side, or neither side has a dominant trend.
+ *
+ * @param data Pointer to the array of MqsRawDataPoint_t containing the data points.
+ * @param start_index The starting index for processing the data window.
+ * @param forgetting_factor The forgetting factor used in the gradient calculations.
+ * @return GradientComparisonResult A structure containing the results of the comparison, including total gradients, 
+ *                                  increase counts, probabilities, and the dominant side.
+ */
+GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, uint16_t start_index, double forgetting_factor) {
     GradientComparisonResult result = {0.0, 0.0, 0, 0, 0.0, 0.0, UNDECIDED};
     
-    // Initialize RunningGradient structures for the first (right) and second (left) parts
-    RunningGradient rg_right_part;
-    RunningGradient rg_left_part;
-
-    init_running_gradient(&rg_right_part);
+    RunningGradient rg_left_part, rg_right_part;
     init_running_gradient(&rg_left_part);
+    init_running_gradient(&rg_right_part);
 
-    size_t middle_index = start_index + 15;  // Middle of the window
+    uint16_t middle_index = start_index + WINDOW_SIZE / 2;  // Middle of the window
 
-    // Process the right side first (from middle_index to middle_index + 15)
-    #ifdef DEBUG_LINEAR_GRADIENT
-    printf("Processing the right side from %zu to %zu...\n", middle_index, middle_index + 15);
-    #endif
+    // Process the left side (first part)
+    printf("Processing the left side (first part) from %u to %u...\n", middle_index - (WINDOW_SIZE / 2), middle_index);
+    process_gradient(&rg_left_part, data, middle_index - (WINDOW_SIZE / 2), middle_index, 
+                     &result.total_gradient_first_part, &result.increase_count_first_part);
+    result.probability_increase_first_part = calculate_probability(&rg_left_part);
 
-    for (size_t i = 0; i < (WINDOW_SIZE / 2); ++i) {
-        size_t index = middle_index + i;
+    // Process the right side (second part)
+    printf("Processing the right side (second part) from %u to %u...\n", middle_index, middle_index + (WINDOW_SIZE / 2));
+    process_gradient(&rg_right_part, data, middle_index, middle_index + (WINDOW_SIZE / 2), 
+                     &result.total_gradient_second_part, &result.increase_count_second_part);
+    result.probability_increase_second_part = calculate_probability(&rg_right_part);
 
-        #ifdef DEBUG_LINEAR_GRADIENT
-        printf("Adding data point %zu: %f to the right part\n", index, data[index]);
-        #endif
-
-        add_data_point(&rg_right_part, data[index]);
-
-        if (rg_right_part.num_points > 1) {  // Ensure we have enough points to calculate a gradient
-            const double gradient = calculate_gradient(&rg_right_part);
-
-            #ifdef DEBUG_LINEAR_GRADIENT
-            printf("Calculated gradient for right part at index %zu: %f\n", index, gradient);
-            #endif
-
-            result.total_gradient_first_part += gradient;
-
-            if (gradient > 0.1f) { // TODO: HARDCODED. SHOULDNT BE HARDCODED. 
-                result.increase_count_first_part++;
-
-                #ifdef DEBUG_LINEAR_GRADIENT
-                printf("Increase count for right part incremented. Current count: %zu\n", result.increase_count_first_part);
-                #endif
-            }
-        }
-    }
-
-    // Calculate the probability of an increasing trend for the right part
-    result.probability_increase_first_part = calculate_probability(&rg_right_part);
-
-    #ifdef DEBUG_LINEAR_GRADIENT
-    printf("Probability of increase for the right part: %f\n", result.probability_increase_first_part);
-    #endif
-
-    // Process the left side (from middle_index to middle_index - 15)
-    #ifdef DEBUG_LINEAR_GRADIENT
-    printf("Processing the left side from %zu to %zu...\n", middle_index, middle_index - 15);
-    #endif
-
-    for (size_t i = 0; i < (WINDOW_SIZE / 2); ++i) { // NOT HARDCODED ANYMORE
-        size_t index = middle_index - i;
-
-        #ifdef DEBUG_LINEAR_GRADIENT
-        printf("Adding data point %zu: %f to the left part\n", index, data[index]);
-        #endif
-
-        add_data_point(&rg_left_part, data[index]);
-
-        if (rg_left_part.num_points > 1) {  // Ensure we have enough points to calculate a gradient
-            const double gradient = calculate_gradient(&rg_left_part);
-
-            #ifdef DEBUG_LINEAR_GRADIENT
-            printf("Calculated gradient for left part at index %zu: %f\n", index, gradient);
-            #endif
-
-            result.total_gradient_second_part += gradient;
-
-            if (gradient > 0.1f) {
-                result.increase_count_second_part++;
-
-                #ifdef DEBUG_LINEAR_GRADIENT
-                printf("Increase count for left part incremented. Current count: %zu\n", result.increase_count_second_part);
-                #endif
-            }
-        }
-    }
-
-    // Calculate the probability of an increasing trend for the left part
-    result.probability_increase_second_part = calculate_probability(&rg_left_part);
-
-    #ifdef DEBUG_LINEAR_GRADIENT
-    printf("Probability of increase for the left part: %f\n", result.probability_increase_second_part);
-    #endif
-
-    // Compare the total gradients and incremental counts to determine the dominant side
-    #ifdef DEBUG_LINEAR_GRADIENT
+    // Compare the results to determine the dominant side
     printf("Comparing the results...\n");
-    #endif
+    result.dominant_side = determine_dominant_side(&result);
 
-    if (result.total_gradient_first_part > result.total_gradient_second_part && 
-        result.increase_count_first_part > result.increase_count_second_part) {
-        result.dominant_side = RIGHT_SIDE;
-
-        #ifdef DEBUG_LINEAR_GRADIENT
-        printf("The right side has a stronger increasing trend.\n");
-        #endif
-    } else if (result.total_gradient_second_part > result.total_gradient_first_part && 
-               result.increase_count_second_part > result.increase_count_first_part) {
-        result.dominant_side = LEFT_SIDE;
-
-        #ifdef DEBUG_LINEAR_GRADIENT
-        printf("The left side has a stronger increasing trend.\n");
-        #endif
-    } else {
-        result.dominant_side = UNDECIDED;
-
-        #ifdef DEBUG_LINEAR_GRADIENT
-        printf("The trend is undecided or similar on both sides.\n");
-        #endif
+    switch (result.dominant_side) {
+        case LEFT_SIDE:
+            printf("The left side has a stronger trend.\n");
+            break;
+        case RIGHT_SIDE:
+            printf("The right side has a stronger trend.\n");
+            break;
+        case UNDECIDED:
+        default:
+            printf("The trend is undecided or similar on both sides.\n");
+            break;
     }
 
-    // Return the result structure with the calculated values
     return result;
 }
+

@@ -69,8 +69,9 @@ void init_running_cubic_gradient(RunningCubicGradient *rg, double forgetting_fac
  *
  * Symmetry in the inverse covariance matrix is enforced during the update process to maintain numerical stability and correctness.
  */
+void add_cubic_data_point(RunningCubicGradient *const rg, const MqsRawDataPoint_t *data_point) {
+    double y = data_point->phaseAngle; // Extract the phase angle from the data point
 
-void add_cubic_data_point(RunningCubicGradient *const rg, const double y) {
     // Check if the current window is not full
     if (rg->num_points < rg->max_points) {
         // Add new data point to the window
@@ -79,7 +80,7 @@ void add_cubic_data_point(RunningCubicGradient *const rg, const double y) {
         rg->num_points++;
     } else {
         // Shift the window to the left and add new data point
-        for (size_t i = 0; i < rg->max_points - 1; ++i) {
+        for (uint16_t i = 0; i < rg->max_points - 1; ++i) {
             rg->y[i] = rg->y[i + 1];
             rg->x[i] = rg->x[i + 1];
         }
@@ -149,7 +150,7 @@ void add_cubic_data_point(RunningCubicGradient *const rg, const double y) {
 
     // Recalculate the residual sum of squares
     rg->residual_sum_squares = 0.0;
-    for (size_t i = 0; i < rg->num_points; ++i) {
+    for (uint16_t i = 0; i < rg->num_points; ++i) {
         double error = rg->y[i] - (rg->coefficients[0] * pow(rg->x[i], 3) + rg->coefficients[1] * pow(rg->x[i], 2) + rg->coefficients[2] * rg->x[i] + rg->coefficients[3]);
         rg->residual_sum_squares += error * error;
     }
@@ -219,7 +220,7 @@ double calculate_cubic_second_order_gradient(const RunningCubicGradient *rg) {
  * @param start_index Starting index from which to begin the gradient calculation.
  * @param forgetting_factor The forgetting factor for the RLS algorithm.
  */
-void compute_cubic_second_order_gradients(double *second_order_gradients, const double *values, size_t length, size_t start_index, double forgetting_factor) {
+void compute_cubic_second_order_gradients(double *second_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
     // Ensure that the start index and the length allow for calculations
     if (start_index + CUBIC_RLS_WINDOW > length) {
         printf("Insufficient data to compute second-order gradients from the starting index.\n");
@@ -231,11 +232,11 @@ void compute_cubic_second_order_gradients(double *second_order_gradients, const 
     init_running_cubic_gradient(&rg, forgetting_factor);
 
     // Loop through the next values starting from start_index
-    for (size_t i = 0; i < CUBIC_RLS_WINDOW; ++i) {
-        size_t current_index = start_index + i;
-        double current_value = values[current_index];
+    for (uint16_t i = 0; i < CUBIC_RLS_WINDOW; ++i) {
+        uint16_t current_index = start_index + i;
+        const MqsRawDataPoint_t *current_value = &values[current_index];
 
-        // Add the current value to the running cubic gradient
+        // Add the current value's phaseAngle to the running cubic gradient
         add_cubic_data_point(&rg, current_value);
 
         // Calculate the second-order gradient (curvature) only if we have at least 4 data points
@@ -245,14 +246,14 @@ void compute_cubic_second_order_gradients(double *second_order_gradients, const 
 
             #ifdef DEBUG_CUBIC_GRADIENT_CALC
             // Print the current second-order gradient and its index
-            printf("Second-order gradient at rg index %zu after adding value %.6f: %.6f\n", i, current_value, second_order_gradient);
+            printf("Second-order gradient at rg index %u after adding phase angle %.6f: %.6f\n", i, current_value->phaseAngle, second_order_gradient);
             #endif
         } else {
             second_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
 
             #ifdef DEBUG_CUBIC_GRADIENT_CALC
             // Print a message indicating insufficient data and its index
-            printf("Not enough data points to calculate the gradient at rg index %zu after adding value %.6f.\n", i, current_value);
+            printf("Not enough data points to calculate the gradient at rg index %u after adding phase angle %.6f.\n", i, current_value->phaseAngle);
             #endif
         }
     }
@@ -279,14 +280,14 @@ void compute_cubic_second_order_gradients(double *second_order_gradients, const 
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
  * @return bool True if the peak is verified based on the trend analysis, false otherwise.
  */
-bool verify_cubic_peak(const double *values, size_t length, const double *second_order_gradients, size_t peak_index, size_t start_index, double forgetting_factor) {
-    size_t left_trend_count = 0;
-    size_t right_trend_count = 0;
+bool verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, const double *second_order_gradients, uint16_t peak_index, uint16_t start_index, double forgetting_factor) {
+    uint16_t left_trend_count = 0;
+    uint16_t right_trend_count = 0;
     bool left_truncated = false;
     bool right_truncated = false;
 
     // Count increasing trends on the left side of the peak
-    for (size_t i = peak_index; i > 0; --i) {
+    for (uint16_t i = peak_index; i > 0; --i) {
         if (second_order_gradients[i - 1] > 0) {
             left_trend_count++;
             if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
@@ -297,7 +298,7 @@ bool verify_cubic_peak(const double *values, size_t length, const double *second
     }
 
     // Count decreasing trends on the right side of the peak
-    for (size_t i = peak_index; i < CUBIC_RLS_WINDOW - 1; ++i) {
+    for (uint16_t i = peak_index; i < CUBIC_RLS_WINDOW - 1; ++i) {
         if (second_order_gradients[i + 1] < 0) {
             right_trend_count++;
             if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
@@ -307,17 +308,17 @@ bool verify_cubic_peak(const double *values, size_t length, const double *second
         }
     }
 
-    printf("Left trends count: %zu, Right trends count: %zu\n", left_trend_count, right_trend_count);
+    printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
 
     // If verification was truncated on the left side, attempt to re-verify by shifting the window left
     if (left_truncated && left_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index >= 10) {
         printf("Left truncation detected, shifting window 10 points to the left for re-verification...\n");
-        size_t new_start_index = start_index - 10;
+        uint16_t new_start_index = start_index - 10;
         double shifted_gradients[CUBIC_RLS_WINDOW];
         compute_cubic_second_order_gradients(shifted_gradients, values, length, new_start_index, forgetting_factor);
 
         // Recount increasing trends on the left side of the peak
-        for (size_t i = 10; i > 0; --i) {
+        for (uint16_t i = 10; i > 0; --i) {
             if (shifted_gradients[i - 1] > 0) {
                 left_trend_count++;
                 if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
@@ -330,12 +331,12 @@ bool verify_cubic_peak(const double *values, size_t length, const double *second
     // If verification was truncated on the right side, attempt to re-verify by shifting the window right
     if (right_truncated && right_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index + CUBIC_RLS_WINDOW <= length - 10) {
         printf("Right truncation detected, shifting window 10 points to the right for re-verification...\n");
-        size_t new_start_index = start_index + 10;
+        uint16_t new_start_index = start_index + 10;
         double shifted_gradients[CUBIC_RLS_WINDOW];
         compute_cubic_second_order_gradients(shifted_gradients, values, length, new_start_index, forgetting_factor);
 
         // Recount decreasing trends on the right side of the peak
-        for (size_t i = 10; i < 20; ++i) {
+        for (uint16_t i = 10; i < 20; ++i) {
             if (shifted_gradients[i] < 0) {
                 right_trend_count++;
                 if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
@@ -362,7 +363,7 @@ bool verify_cubic_peak(const double *values, size_t length, const double *second
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
  * @return CubicPeakAnalysisResult Structure containing the peak detection status and the peak index if found and verified.
  */
-CubicPeakAnalysisResult find_and_verify_cubic_peak(const double *values, size_t length, size_t start_index, double forgetting_factor) {
+CubicPeakAnalysisResult find_and_verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
     CubicPeakAnalysisResult result = { .peak_found = false, .peak_index = 0 };
     
     // Declare the second_order_gradients array
@@ -372,7 +373,7 @@ CubicPeakAnalysisResult find_and_verify_cubic_peak(const double *values, size_t 
     compute_cubic_second_order_gradients(second_order_gradients, values, length, start_index, forgetting_factor);
 
     // Find and verify the peak based on the computed gradients
-    for (size_t i = 1; i < CUBIC_RLS_WINDOW; ++i) {
+    for (uint16_t i = 1; i < CUBIC_RLS_WINDOW; ++i) {
         if (second_order_gradients[i - 1] > 0 && second_order_gradients[i] < 0) {
             // Temporarily set the peak index
             result.peak_index = start_index + i;
@@ -380,10 +381,10 @@ CubicPeakAnalysisResult find_and_verify_cubic_peak(const double *values, size_t 
             // Verify the detected peak
             if (verify_cubic_peak(values, length, second_order_gradients, i, start_index, forgetting_factor)) {
                 result.peak_found = true;
-                printf("Verified peak found at index %zu\n", result.peak_index);
+                printf("Verified peak found at index %u\n", result.peak_index);
                 break; // Exit the loop once a verified peak is found
             } else {
-                printf("Peak at index %zu did not pass verification. Continuing search...\n", result.peak_index);
+                printf("Peak at index %u did not pass verification. Continuing search...\n", result.peak_index);
                 result.peak_found = false; // Reset peak_found as the peak failed verification
             }
         }
@@ -409,7 +410,7 @@ CubicPeakAnalysisResult find_and_verify_cubic_peak(const double *values, size_t 
  * @param window_size The number of points to include in the gradient calculation.
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
  */
-void compute_cubic_first_order_gradients(double *first_order_gradients, const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor) {
+void compute_cubic_first_order_gradients(double *first_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     // Ensure that the start index and the window size allow for calculations
     if (start_index + window_size > length) {
         printf("Insufficient data to compute first-order gradients for the specified window size.\n");
@@ -423,11 +424,11 @@ void compute_cubic_first_order_gradients(double *first_order_gradients, const do
     double cumulative_sum = 0.0;  // Variable to store the cumulative sum of first-order gradients
 
     // Loop through the specified window size
-    for (size_t i = 0; i < window_size; ++i) {
-        size_t current_index = start_index + i;
-        double current_value = values[current_index];
+    for (uint16_t i = 0; i < window_size; ++i) {
+        uint16_t current_index = start_index + i;
+        const MqsRawDataPoint_t *current_value = &values[current_index];
 
-        // Add the current value to the running cubic gradient
+        // Add the current value's phaseAngle to the running cubic gradient
         add_cubic_data_point(&rg, current_value);
 
         // Calculate the first-order gradient (slope) only if we have at least 4 data points
@@ -439,17 +440,15 @@ void compute_cubic_first_order_gradients(double *first_order_gradients, const do
             // Update the cumulative sum of first-order gradients
             cumulative_sum += first_order_gradient;
 
-            //#ifdef DEBUG_CUBIC_GRADIENT_CALC
-            // Print the current first-order gradient, its index, and the cumulative sum
-            printf("First-order gradient at rg index %zu after adding value %.6f: %.6f\n", start_index + i, current_value, first_order_gradient);
-            printf("Cumulative sum of first-order gradients up to index %zu: %.6f\n", start_index + i, cumulative_sum);
-            //#endif
+            // Debugging: Print the calculated first-order gradient
+            printf("First-order gradient at rg index %u after adding phase angle %.6f: %.6f\n", start_index + i, current_value->phaseAngle, first_order_gradient);
+            printf("Cumulative sum of first-order gradients up to index %u: %.6f\n", start_index + i, cumulative_sum);
         } else {
             first_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
 
             #ifdef DEBUG_CUBIC_GRADIENT_CALC
             // Print a message indicating insufficient data and its index
-            printf("Not enough data points to calculate the gradient at rg index %zu after adding value %.6f.\n", i, current_value);
+            printf("Not enough data points to calculate the gradient at rg index %u after adding phase angle %.6f.\n", i, current_value->phaseAngle);
             #endif
         }
     }
@@ -678,7 +677,7 @@ GradientTrendIndices find_consistent_decrease(double *gradients, size_t start_in
  *   - It ignores one decrease in the trend to account for minor fluctuations.
  *   - If the cumulative sum is greater than the previous maximum sum, it updates the maximum cumulative sum and marks the trend as valid.
  */
-GradientTrendResult track_gradient_trends_with_cubic_regression(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor) {
+GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     GradientTrendResult trend_result = {0}; // Initialize the struct with default values
 
     // Ensure that the start index and the window size allow for calculations
@@ -695,11 +694,11 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const double *va
     init_running_cubic_gradient(&rg, forgetting_factor);
 
     // Loop through the specified window size and calculate first-order gradients
-    for (size_t i = 0; i < window_size; ++i) {
-        size_t current_index = start_index + i;
-        double current_value = values[current_index];
+    for (uint16_t i = 0; i < window_size; ++i) {
+        uint16_t current_index = start_index + i;
+        const MqsRawDataPoint_t *current_value = &values[current_index];
 
-        // Add the current value to the running cubic gradient
+        // Add the current value's phaseAngle to the running cubic gradient
         add_cubic_data_point(&rg, current_value);
 
         // Check if we have enough points to calculate the gradient
@@ -709,11 +708,11 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const double *va
             first_order_gradients[i] = first_order_gradient;
 
             // Debugging: Print the calculated first-order gradient
-            //printf("Calculated first-order gradient at index %zu: %.6f\n", current_index, first_order_gradient);
+            //printf("Calculated first-order gradient at index %u: %.6f\n", current_index, first_order_gradient);
         } else {
             first_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
             // Debugging: Print a message indicating insufficient data points
-           // printf("Not enough data points to calculate the gradient at index %zu.\n", current_index);
+           // printf("Not enough data points to calculate the gradient at index %u.\n", current_index);
         }
     }
 
@@ -725,7 +724,7 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const double *va
 
     // Debugging: Print the results of the increase detection
     if (trend_result.increase_info.valid) {
-        printf("Consistent increase found from index %zu to %zu with sum %.6f\n",
+        printf("Consistent increase found from index %u to %u with sum %.6f\n",
                trend_result.increase_info.start_index, trend_result.increase_info.end_index, trend_result.increase_info.max_sum);
     } else {
         printf("No consistent increase detected.\n");
@@ -739,7 +738,7 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const double *va
 
     // Debugging: Print the results of the decrease detection
     if (trend_result.decrease_info.valid) {
-        printf("Consistent decrease found from index %zu to %zu with sum %.6f\n",
+        printf("Consistent decrease found from index %u to %u with sum %.6f\n",
                trend_result.decrease_info.start_index, trend_result.decrease_info.end_index, trend_result.decrease_info.max_sum);
     } else {
         printf("No consistent decrease detected.\n");
@@ -775,7 +774,7 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const double *va
  * - **Decision Logic:**
  *   - If both the threshold and index difference criteria are met, the function concludes that the trend is significant.
  */
-PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values, size_t length, size_t start_index, size_t window_size, double forgetting_factor) {
+PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     // Call the function to track gradient trends
     GradientTrendResult trend_result = track_gradient_trends_with_cubic_regression(values, length, start_index, window_size, forgetting_factor);
 
@@ -785,7 +784,7 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
     result.decrease_info = trend_result.decrease_info;
 
     double significance_threshold = cubic_analysis_params.significance_threshold;
-    size_t duration_threshold = cubic_analysis_params.duration_threshold;
+    uint16_t duration_threshold = cubic_analysis_params.duration_threshold;
 
     double average_increase = 0.0;
     double average_decrease = 0.0;
@@ -793,7 +792,7 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
     // Calculate average increase if a valid increase trend is detected
     if (trend_result.increase_info.valid) {
         double sum_of_gradients = trend_result.increase_info.max_sum;
-        size_t index_difference = trend_result.increase_info.end_index - trend_result.increase_info.start_index;
+        uint16_t index_difference = trend_result.increase_info.end_index - trend_result.increase_info.start_index;
         average_increase = sum_of_gradients / (double)index_difference;
 
         // Evaluate significance based on global threshold and new average conditions
@@ -806,7 +805,7 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
     // Calculate average decrease if a valid decrease trend is detected
     if (trend_result.decrease_info.valid) {
         double sum_of_gradients = trend_result.decrease_info.max_sum;
-        size_t index_difference = trend_result.decrease_info.end_index - trend_result.decrease_info.start_index;
+        uint16_t index_difference = trend_result.decrease_info.end_index - trend_result.decrease_info.start_index;
         average_decrease = sum_of_gradients / (double)index_difference;
 
         // Evaluate significance based on global threshold and new average conditions
@@ -821,12 +820,12 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const double *values,
            result.significant_increase ? "Yes" : "No", result.significant_decrease ? "Yes" : "No");
 
     if (trend_result.increase_info.valid) {
-        printf("Average Increase: %.6f over interval [%zu - %zu]\n", 
+        printf("Average Increase: %.6f over interval [%u - %u]\n", 
                average_increase, trend_result.increase_info.start_index, trend_result.increase_info.end_index);
     }
 
     if (trend_result.decrease_info.valid) {
-        printf("Average Decrease: %.6f over interval [%zu - %zu]\n", 
+        printf("Average Decrease: %.6f over interval [%u - %u]\n", 
                average_decrease, trend_result.decrease_info.start_index, trend_result.decrease_info.end_index);
     }
 

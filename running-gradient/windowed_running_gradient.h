@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "mqs_def.h"
 
 #define WINDOW_SIZE 30
 #define FORGETTING_FACTOR 0.5
@@ -50,14 +51,14 @@ typedef enum {
 typedef struct {
     double total_gradient_first_part;     /**< Total gradient for the first part (usually the right side) of the dataset. */
     double total_gradient_second_part;    /**< Total gradient for the second part (usually the left side) of the dataset. */
-    size_t increase_count_first_part;     /**< Count of increases detected in the first part of the dataset. */
-    size_t increase_count_second_part;    /**< Count of increases detected in the second part of the dataset. */
+    uint16_t increase_count_first_part;     /**< Count of increases detected in the first part of the dataset. */
+    uint16_t increase_count_second_part;    /**< Count of increases detected in the second part of the dataset. */
     double probability_increase_first_part; /**< Probability of an increasing trend in the first part of the dataset. */
     double probability_increase_second_part; /**< Probability of an increasing trend in the second part of the dataset. */
     PeakPosition dominant_side;           /**< Indicates which side (left or right) has a stronger increasing trend. */
 } GradientComparisonResult;
 
-GradientComparisonResult compare_gradient_parts(const double *data, size_t start_index, double forgetting_factor);
+GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, uint16_t start_index, double forgetting_factor);
 double calculate_gradient(const RunningGradient * const rg);
 
 #endif // WINDOWED_RUNNING_GRADIENT_H
