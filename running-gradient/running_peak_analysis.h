@@ -5,6 +5,9 @@
 #include "running_quadratic_gradient.h"
 #include "mqs_def.h" // Assuming this is where MqsRawDataPoint_t is defined
 
+   // Define the buffer size for the sliding window analysis
+   #define BUFFER_SIZE 200
+
 // Struct to hold the result of segment analysis, including concavity analysis
 typedef struct {
     bool isPotentialPeak;
@@ -39,6 +42,9 @@ typedef struct {
 // Extern declaration of the buffer manager for usage across different translation units
 extern BufferManager buffer_manager;
 
+// Declare the buffer with extern so that it can be accessed from other files
+extern MqsRawDataPoint_t buffer[BUFFER_SIZE];
+
 /**
  * @brief Initializes the buffer manager with the provided parameters.
  * 
@@ -60,7 +66,7 @@ void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16
  * @param forgetting_factor Forgetting factor that determines the weight of newer data points
  * @return SegmentAnalysisResult Structure containing information about the detected trends and concavity pattern
  */
-SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t size, uint16_t start_index, double forgetting_factor);
+SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t window_size, double forgetting_factor);
 
 /**
  * @brief Performs sliding window analysis with buffer management.

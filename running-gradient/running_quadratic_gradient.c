@@ -334,205 +334,6 @@ double* compute_first_order_gradients(const MqsRawDataPoint_t *values, size_t le
 }
 
 /**
- * @brief Performs initial concavity analysis by summing the second-order gradients for every 10 points in the RLS window.
- *
- * This function computes the sum of second-order gradients over every 10 points within the RLS window,
- * starting from the provided `start_index`. The results are returned in a `ConcavityAnalysisResult` structure.
- * The function also allows for re-initialization of the `RunningQuadraticGradient` structure after every 10 points,
- * depending on the value of the `reinitialize_after_each_segment` parameter.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The starting index for gradient calculations.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @param reinitialize_after_each_segment Boolean flag to control whether to re-initialize after every 10 data points.
- * @return A `ConcavityAnalysisResult` structure containing the sums of second-order gradients for each 10-point segment.
- */
-ConcavityAnalysisResult initial_concavity_analysis(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor, bool reinitialize_after_each_segment) {
-    ConcavityAnalysisResult result = { .sums = {0.0} };
-
-    // Ensure that the start index and the length allow for the analysis
-    if (start_index + RLS_WINDOW > length) {
-        printf("Insufficient data for initial concavity analysis.\n");
-        return result;
-    }
-
-    RunningQuadraticGradient rg;
-    init_running_quadratic_gradient(&rg, forgetting_factor);
-
-    // Loop through the RLS window in segments of 10 points
-    for (uint16_t i = 0; i < RLS_WINDOW; i += 10) {
-        if (reinitialize_after_each_segment) {
-            // Re-initialize the running quadratic gradient structure
-            init_running_quadratic_gradient(&rg, forgetting_factor);
-        }
-
-        double sum = 0.0;
-        uint16_t valid_point_count = 0;
-
-        // Process each segment of 10 points
-        for (uint16_t j = i; j < i + 10 && j < RLS_WINDOW; ++j) {
-            const MqsRawDataPoint_t *current_value = &values[start_index + j];
-            add_quadratic_data_point(&rg, current_value);
-
-            if (rg.num_points >= 3 && !isnan(rg.coefficients[0])) { // Ensure at least 3 points before calculating
-                double second_order_gradient = calculate_second_order_gradient(&rg);
-                sum += second_order_gradient;
-                valid_point_count++;
-            } else {
-                //printf("Skipping index %u due to insufficient data points or NaN.\n", j);
-            }
-        }
-
-        // Only record the sum if it was computed with at least one valid point
-        if (valid_point_count > 0) {
-            result.sums[i / 10] = sum;
-            printf("Sum of second-order gradients from index %u to %u: %.6f\n", start_index + i, start_index + i + 9, sum);
-        } else {
-            result.sums[i / 10] = NAN;
-            //printf("Insufficient data to calculate sum for segment %u.\n", i / 10 + 1);
-        }
-    }
-
-    return result;
-}
-
-
-/**
- * @brief Analyzes the behavior of the three segments and determines the necessary action based on concavity.
- *
- * This function examines the sum of second-order gradients for each of the three segments within a window of data 
- * and determines the overall pattern of concavity. It returns a `ConcavityAnalysisOutput` structure that 
- * encapsulates the suggested actions (`moveLeft`, `moveRight`, `stay`, `isNoisy`) and flags for potential and true peaks.
- *
- * The function first categorizes each segment as increasing, slightly increasing, or decreasing based on thresholds.
- * It then combines these categorizations into a ternary pattern, which is used to determine the appropriate response.
- *
- * The possible actions include:
- * - `moveLeft`: Indicates that the analysis suggests moving left.
- * - `moveRight`: Indicates that the analysis suggests moving right.
- * - `stay`: Indicates that the analysis suggests staying in the current position.
- * - `isNoisy`: Indicates that the segment might be noisy.
- *
- * Additionally, the function can detect potential and true peaks:
- * - `isPotentialPeak`: Set to true if a potential peak is detected.
- * - `isTruePeak`: Set to true if a true peak is detected.
- *
- * @param concavity_result The `ConcavityAnalysisResult` containing the sums of the second-order gradients.
- * @return A `ConcavityAnalysisOutput` structure containing the analysis results and suggested actions.
- */ 
-ConcavityAnalysisOutput analyze_concavity_segments(const ConcavityAnalysisResult *concavity_result) {
-    ConcavityAnalysisOutput output = {false, false, false, false, false, false};  // Initialize all fields to false
-
-    if (isnan(concavity_result->sums[0]) || isnan(concavity_result->sums[1]) || isnan(concavity_result->sums[2])) {
-        printf("Insufficient data for determining concavity pattern.\n");
-        return output;
-    }
-
-    // Define thresholds for categorizing the gradient sums
-    double increase_threshold = quadratic_analysis_params.minimum_second_order_gradient_sum;
-    double small_increase_threshold = 0.0;
-
-    // Map to 2 (increase), 1 (small increase), or 0 (decrease)
-    int first_segment = concavity_result->sums[0] > increase_threshold ? 2 :
-                        (concavity_result->sums[0] > small_increase_threshold ? 1 : 0);
-    int second_segment = concavity_result->sums[1] > increase_threshold ? 2 :
-                         (concavity_result->sums[1] > small_increase_threshold ? 1 : 0);
-    int third_segment = concavity_result->sums[2] > increase_threshold ? 2 :
-                        (concavity_result->sums[2] > small_increase_threshold ? 1 : 0);
-                        
-    printf("%d %d %d\n", first_segment, second_segment, third_segment);
-
-    // Create a ternary pattern based on the segments (using 2 as increase, 1 as small increase, 0 as decrease)
-    int pattern = (first_segment * 9) + (second_segment * 3) + third_segment;
-
-    // Switch on the ternary pattern to determine the concavity pattern
-    switch (pattern) {
-        case 25: // 2, 2, 1: INCREASE, INCREASE, SMALL INCREASE 
-        case 24: // 2, 2, 0: INCREASE, INCREASE, DECREASE
-            // The curve is increasing initially but then either slows down (small increase) or starts to decrease.
-            // This suggests that the peak might be close or reached soon, so we suggest moving to the right.
-            output.isPotentialPeak = true;
-            output.moveRight = true;
-            break;
-
-        case 23: // 2, 1, 2: INCREASE, SMALL INCREASE, INCREASE
-        case 22: // 2, 1, 1: INCREASE, SMALL INCREASE, SMALL INCREASE 
-        case 21: // 2, 1, 0: INCREASE, SMALL INCREASE, DECREASE
-            // These patterns are noisy, indicating some fluctuations around a possible peak.
-            // The suggestion is to move to the right, but we mark it as noisy.
-            output.isPotentialPeak = true;
-            output.moveRight = true;
-            output.isNoisy = true;
-            break;
-
-        case 20: // 2, 0, 2: INCREASE, DECREASE, INCREASE
-            // This pattern is indicative of a noisy situation where the curve dips and then rises again.
-            // We suggest staying in the current position and mark it as noisy.
-            output.isPotentialPeak = true;
-            output.stay = true;
-            output.isNoisy = true;
-            break;
-
-        case 18: // 2, 0, 0: INCREASE, DECREASE, DECREASE
-            // The curve has increased and then started decreasing consistently.
-            // This is a strong indication that the peak has been reached, so we suggest moving left to center on the peak.
-            output.isPotentialPeak = true;
-            output.isTruePeak = true;
-            output.moveLeft = true;
-            break;
-
-        case 14: // 1, 2, 2: SMALL INCREASE, INCREASE, INCREASE
-            // The curve is consistently increasing after a small initial increase.
-            // This suggests that we are on the left side of the peak and should move right.
-            output.moveRight = true;
-            break;
-
-        case 11: // 1, 0, 2: SMALL INCREASE, DECREASE, INCREASE 
-        case 9:  // 0, 2, 2: DECREASE, INCREASE, INCREASE
-            // These patterns indicate that the curve decreased initially but is now increasing.
-            // This suggests that we are on the right side of the peak, so we should move left.
-            output.moveLeft = true;
-            break;
-
-        case 10: // 1, 0, 0: SMALL INCREASE, DECREASE, DECREASE
-        case 7:  // 0, 2, 0: DECREASE, INCREASE, DECREASE
-            // These are noisy patterns with fluctuations indicating a potential peak.
-            // We suggest moving left and mark it as noisy.
-            output.isPotentialPeak = true;
-            output.moveLeft = true;
-            output.isNoisy = true;
-            break;
-
-        case 4:  // 0, 0, 2: DECREASE, DECREASE, INCREASE 
-            // The curve decreased initially but is now increasing, suggesting that we are on the right side of the peak.
-            // We suggest moving left.
-            output.moveLeft = true;
-            break;
-
-        case 0:  // 0, 0, 0: DECREASE, DECREASE, DECREASE
-            // The curve is consistently decreasing, suggesting that we are past the peak.
-            // We suggest moving left and mark it as the true peak.
-            output.isTruePeak = true;
-            output.moveLeft = true;
-            break;
-
-        case 26: // 2, 2, 2: INCREASE, INCREASE, INCREASE
-            // The curve is consistently increasing, indicating that we are on the left side of the peak.
-            // We suggest moving right.
-            output.moveRight = true;
-            break;
-
-        default:
-            // If the pattern does not match any of the predefined cases, we mark it as noisy.
-            output.isNoisy = true;
-            break;
-    }
-
-    return output;
-}
-
-/**
  * @brief Finds a consistent increasing trend in the second-order gradient array.
  *
  * This function scans through an array of second-order gradient values to identify a consistent increasing trend.
@@ -800,3 +601,206 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
 
     return trend_result;
 }
+
+
+
+
+/**
+ * @brief Performs initial concavity analysis by summing the second-order gradients for every 10 points in the RLS window.
+ *
+ * This function computes the sum of second-order gradients over every 10 points within the RLS window,
+ * starting from the provided `start_index`. The results are returned in a `ConcavityAnalysisResult` structure.
+ * The function also allows for re-initialization of the `RunningQuadraticGradient` structure after every 10 points,
+ * depending on the value of the `reinitialize_after_each_segment` parameter.
+ *
+ * @param values Array of double values representing the data.
+ * @param length Length of the data array.
+ * @param start_index The starting index for gradient calculations.
+ * @param forgetting_factor The forgetting factor used in the RLS algorithm.
+ * @param reinitialize_after_each_segment Boolean flag to control whether to re-initialize after every 10 data points.
+ * @return A `ConcavityAnalysisResult` structure containing the sums of second-order gradients for each 10-point segment.
+
+ConcavityAnalysisResult initial_concavity_analysis(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor, bool reinitialize_after_each_segment) {
+    ConcavityAnalysisResult result = { .sums = {0.0} };
+
+    // Ensure that the start index and the length allow for the analysis
+    if (start_index + RLS_WINDOW > length) {
+        printf("Insufficient data for initial concavity analysis.\n");
+        return result;
+    }
+
+    RunningQuadraticGradient rg;
+    init_running_quadratic_gradient(&rg, forgetting_factor);
+
+    // Loop through the RLS window in segments of 10 points
+    for (uint16_t i = 0; i < RLS_WINDOW; i += 10) {
+        if (reinitialize_after_each_segment) {
+            // Re-initialize the running quadratic gradient structure
+            init_running_quadratic_gradient(&rg, forgetting_factor);
+        }
+
+        double sum = 0.0;
+        uint16_t valid_point_count = 0;
+
+        // Process each segment of 10 points
+        for (uint16_t j = i; j < i + 10 && j < RLS_WINDOW; ++j) {
+            const MqsRawDataPoint_t *current_value = &values[start_index + j];
+            add_quadratic_data_point(&rg, current_value);
+
+            if (rg.num_points >= 3 && !isnan(rg.coefficients[0])) { // Ensure at least 3 points before calculating
+                double second_order_gradient = calculate_second_order_gradient(&rg);
+                sum += second_order_gradient;
+                valid_point_count++;
+            } else {
+                //printf("Skipping index %u due to insufficient data points or NaN.\n", j);
+            }
+        }
+
+        // Only record the sum if it was computed with at least one valid point
+        if (valid_point_count > 0) {
+            result.sums[i / 10] = sum;
+            printf("Sum of second-order gradients from index %u to %u: %.6f\n", start_index + i, start_index + i + 9, sum);
+        } else {
+            result.sums[i / 10] = NAN;
+            //printf("Insufficient data to calculate sum for segment %u.\n", i / 10 + 1);
+        }
+    }
+
+    return result;
+}
+ */
+
+/**
+ * @brief Analyzes the behavior of the three segments and determines the necessary action based on concavity.
+ *
+ * This function examines the sum of second-order gradients for each of the three segments within a window of data 
+ * and determines the overall pattern of concavity. It returns a `ConcavityAnalysisOutput` structure that 
+ * encapsulates the suggested actions (`moveLeft`, `moveRight`, `stay`, `isNoisy`) and flags for potential and true peaks.
+ *
+ * The function first categorizes each segment as increasing, slightly increasing, or decreasing based on thresholds.
+ * It then combines these categorizations into a ternary pattern, which is used to determine the appropriate response.
+ *
+ * The possible actions include:
+ * - `moveLeft`: Indicates that the analysis suggests moving left.
+ * - `moveRight`: Indicates that the analysis suggests moving right.
+ * - `stay`: Indicates that the analysis suggests staying in the current position.
+ * - `isNoisy`: Indicates that the segment might be noisy.
+ *
+ * Additionally, the function can detect potential and true peaks:
+ * - `isPotentialPeak`: Set to true if a potential peak is detected.
+ * - `isTruePeak`: Set to true if a true peak is detected.
+ *
+ * @param concavity_result The `ConcavityAnalysisResult` containing the sums of the second-order gradients.
+ * @return A `ConcavityAnalysisOutput` structure containing the analysis results and suggested actions.
+
+ConcavityAnalysisOutput analyze_concavity_segments(const ConcavityAnalysisResult *concavity_result) {
+    ConcavityAnalysisOutput output = {false, false, false, false, false, false};  // Initialize all fields to false
+
+    if (isnan(concavity_result->sums[0]) || isnan(concavity_result->sums[1]) || isnan(concavity_result->sums[2])) {
+        printf("Insufficient data for determining concavity pattern.\n");
+        return output;
+    }
+
+    // Define thresholds for categorizing the gradient sums
+    double increase_threshold = quadratic_analysis_params.minimum_second_order_gradient_sum;
+    double small_increase_threshold = 0.0;
+
+    // Map to 2 (increase), 1 (small increase), or 0 (decrease)
+    int first_segment = concavity_result->sums[0] > increase_threshold ? 2 :
+                        (concavity_result->sums[0] > small_increase_threshold ? 1 : 0);
+    int second_segment = concavity_result->sums[1] > increase_threshold ? 2 :
+                         (concavity_result->sums[1] > small_increase_threshold ? 1 : 0);
+    int third_segment = concavity_result->sums[2] > increase_threshold ? 2 :
+                        (concavity_result->sums[2] > small_increase_threshold ? 1 : 0);
+                        
+    printf("%d %d %d\n", first_segment, second_segment, third_segment);
+
+    // Create a ternary pattern based on the segments (using 2 as increase, 1 as small increase, 0 as decrease)
+    int pattern = (first_segment * 9) + (second_segment * 3) + third_segment;
+
+    // Switch on the ternary pattern to determine the concavity pattern
+    switch (pattern) {
+        case 25: // 2, 2, 1: INCREASE, INCREASE, SMALL INCREASE 
+        case 24: // 2, 2, 0: INCREASE, INCREASE, DECREASE
+            // The curve is increasing initially but then either slows down (small increase) or starts to decrease.
+            // This suggests that the peak might be close or reached soon, so we suggest moving to the right.
+            output.isPotentialPeak = true;
+            output.moveRight = true;
+            break;
+
+        case 23: // 2, 1, 2: INCREASE, SMALL INCREASE, INCREASE
+        case 22: // 2, 1, 1: INCREASE, SMALL INCREASE, SMALL INCREASE 
+        case 21: // 2, 1, 0: INCREASE, SMALL INCREASE, DECREASE
+            // These patterns are noisy, indicating some fluctuations around a possible peak.
+            // The suggestion is to move to the right, but we mark it as noisy.
+            output.isPotentialPeak = true;
+            output.moveRight = true;
+            output.isNoisy = true;
+            break;
+
+        case 20: // 2, 0, 2: INCREASE, DECREASE, INCREASE
+            // This pattern is indicative of a noisy situation where the curve dips and then rises again.
+            // We suggest staying in the current position and mark it as noisy.
+            output.isPotentialPeak = true;
+            output.stay = true;
+            output.isNoisy = true;
+            break;
+
+        case 18: // 2, 0, 0: INCREASE, DECREASE, DECREASE
+            // The curve has increased and then started decreasing consistently.
+            // This is a strong indication that the peak has been reached, so we suggest moving left to center on the peak.
+            output.isPotentialPeak = true;
+            output.isTruePeak = true;
+            output.moveLeft = true;
+            break;
+
+        case 14: // 1, 2, 2: SMALL INCREASE, INCREASE, INCREASE
+            // The curve is consistently increasing after a small initial increase.
+            // This suggests that we are on the left side of the peak and should move right.
+            output.moveRight = true;
+            break;
+
+        case 11: // 1, 0, 2: SMALL INCREASE, DECREASE, INCREASE 
+        case 9:  // 0, 2, 2: DECREASE, INCREASE, INCREASE
+            // These patterns indicate that the curve decreased initially but is now increasing.
+            // This suggests that we are on the right side of the peak, so we should move left.
+            output.moveLeft = true;
+            break;
+
+        case 10: // 1, 0, 0: SMALL INCREASE, DECREASE, DECREASE
+        case 7:  // 0, 2, 0: DECREASE, INCREASE, DECREASE
+            // These are noisy patterns with fluctuations indicating a potential peak.
+            // We suggest moving left and mark it as noisy.
+            output.isPotentialPeak = true;
+            output.moveLeft = true;
+            output.isNoisy = true;
+            break;
+
+        case 4:  // 0, 0, 2: DECREASE, DECREASE, INCREASE 
+            // The curve decreased initially but is now increasing, suggesting that we are on the right side of the peak.
+            // We suggest moving left.
+            output.moveLeft = true;
+            break;
+
+        case 0:  // 0, 0, 0: DECREASE, DECREASE, DECREASE
+            // The curve is consistently decreasing, suggesting that we are past the peak.
+            // We suggest moving left and mark it as the true peak.
+            output.isTruePeak = true;
+            output.moveLeft = true;
+            break;
+
+        case 26: // 2, 2, 2: INCREASE, INCREASE, INCREASE
+            // The curve is consistently increasing, indicating that we are on the left side of the peak.
+            // We suggest moving right.
+            output.moveRight = true;
+            break;
+
+        default:
+            // If the pattern does not match any of the predefined cases, we mark it as noisy.
+            output.isNoisy = true;
+            break;
+    }
+
+    return output;
+}
+ */ 
