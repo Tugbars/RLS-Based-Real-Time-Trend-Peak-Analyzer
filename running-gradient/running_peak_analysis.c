@@ -56,7 +56,7 @@
 static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResult *trends, uint16_t window_cubic, uint16_t start_cubic_index) {
     TrendDirectionFlags flags = {false, false, false, true, false, false, false}; // Initialize with on_the_peak
 
-    printf("Window start index: %u, Window size: %u\n", start_cubic_index, window_cubic);
+    //printf("Window start index: %u, Window size: %u\n", start_cubic_index, window_cubic);
 
     double average_increase = 0.0;
     double average_decrease = 0.0;
@@ -68,7 +68,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         increase_duration = trends->increase_info.end_index - trends->increase_info.start_index;
         average_increase = trends->increase_info.max_sum / (double)increase_duration;
 
-        printf("Significant increase detected. Increase end index: %u\n", trends->increase_info.end_index);
+        //printf("Significant increase detected. Increase end index: %u\n", trends->increase_info.end_index);
         printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
@@ -95,7 +95,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         decrease_duration = trends->decrease_info.end_index - trends->decrease_info.start_index;
         average_decrease = trends->decrease_info.max_sum / (double)decrease_duration;
 
-        printf("Significant decrease detected. Decrease start index: %u\n", trends->decrease_info.start_index);
+        //printf("Significant decrease detected. Decrease start index: %u\n", trends->decrease_info.start_index);
         printf("Average Decrease: %.6f over interval [%u - %u]\n", average_decrease, trends->decrease_info.start_index, trends->decrease_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
@@ -141,7 +141,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
     }
     */
 
-    printf("Trend direction determination complete.\n");
+    //printf("Trend direction determination complete.\n");
     return flags;
 }
 
@@ -154,13 +154,13 @@ void log_peak_detection(bool on_peak) {
 void log_direction_determined(int direction) {
     switch (direction) {
         case RIGHT_SIDE:
-            printf("--> Direction determined: RIGHT_SIDE.\n");
+            //printf("--> Direction determined: RIGHT_SIDE.\n");
             break;
         case LEFT_SIDE:
-            printf("--> Direction determined: LEFT_SIDE.\n");
+            //printf("--> Direction determined: LEFT_SIDE.\n");
             break;
         case ON_PEAK:
-            printf("--> Direction determined: ON_PEAK.\n");
+            //printf("--> Direction determined: ON_PEAK.\n");
             break;
         case UNDECIDED:
         default:
@@ -184,28 +184,7 @@ void log_gradient_comparison(GradientComparisonResult gradient_result) {
 }
 
 void log_significant_trend(const char* type, double max_sum) {
-    printf("--> Significant %s trend with max sum %.6f detected, setting ON_PEAK.\n", type, max_sum);
-}
-
-void log_concavity_analysis(ConcavityAnalysisOutput concavity_output) {
-    if (concavity_output.isNoisy) {
-        printf("--> The segment is noisy.\n");
-    }
-    if (concavity_output.moveLeft) {
-        printf("--> Suggested Action: Move LEFT\n");
-    }
-    if (concavity_output.moveRight) {
-        printf("--> Suggested Action: Move RIGHT\n");
-    }
-    if (concavity_output.stay) {
-        printf("--> Suggested Action: Stay in the current position\n");
-    }
-    if (concavity_output.isPotentialPeak) {
-        printf("--> A potential peak is detected.\n");
-    }
-    if (concavity_output.isTruePeak) {
-        printf("--> A true peak is detected.\n");
-    }
+    printf("--> Concavity analysis. Significant %s trend with max sum %.6f detected, setting ON_PEAK.\n", type, max_sum);
 }
 
 void log_final_direction(int nextDirection) {
@@ -305,7 +284,6 @@ concavity_analysis:
             goto end_analysis;
         }
 
-        printf("*********************** CONCAVITY SEGMENT ANALYSIS ************************\n");
         //ConcavityAnalysisResult concavity_result = initial_concavity_analysis(data, window_size, 0, forgetting_factor, true); //NOT NECESSARY ANYMORE
         //ConcavityAnalysisOutput concavity_output = analyze_concavity_segments(&concavity_result);
         //log_concavity_analysis(concavity_output);
@@ -349,7 +327,7 @@ void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16
     // Debugging: Print initialization state
     printf("Buffer Manager initialized:\n");
     printf("Buffer size: %d, Window size: %d, Start index: %d\n", buffer_size, window_size, start_index);
-    printf("Start frequency: %.2f Hz, Frequency increment: %.2f Hz\n", start_frequency, frequency_increment);
+    //printf("Start frequency: %.2f Hz, Frequency increment: %.2f Hz\n", start_frequency, frequency_increment);
 }
 
 
@@ -360,7 +338,7 @@ void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16
  * @param phase_angle_size Size of the phase angle array.
  */
 void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
-    printf("Loading initial window of data into the buffer.\n");
+    //printf("Loading initial window of data into the buffer.\n");
     
     for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
         int16_t buffer_index = (buffer_manager.current_buffer_index + i) % buffer_manager.buffer_size;
@@ -377,7 +355,7 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
         }
     }
 
-    printf("Initial buffer loading complete.\n");
+    //printf("Initial buffer loading complete.\n");
 }
 
  
@@ -398,7 +376,7 @@ void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_
         int16_t buffer_index = (buffer_start_index + i) % buffer_manager.buffer_size;
 
         // Debugging: Log the details of buffer update before actual update
-        printf("[update_phaseAngle_to_buffer] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n", buffer_index, phase_index, phaseAngles[phase_index]);
+        //printf("[update_phaseAngle_to_buffer] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n", buffer_index, phase_index, phaseAngles[phase_index]);
 
         // Copy phaseAngle and optionally set impedance
         buffer_manager.buffer[buffer_index].phaseAngle = phaseAngles[phase_index];
@@ -452,7 +430,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction) {
     }
 
     // Ensure phase index stays within bounds of phaseAngles
-    if (phase_index_start < 0 || phase_index_end > buffer_manager.buffer_size) {
+    if (phase_index_start < 0 || buffer_start_index > buffer_manager.buffer_size) {
         printf("[update_buffer] Out of bounds of phase angles (index: [%d - %d]). Operation aborted.\n", phase_index_start, phase_index_end);
         return;
     }
@@ -480,7 +458,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction) {
  */
 void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size) {
     // Flag to indicate entry into the function
-    printf("[handle_undecided_case] Entering undecided case handler.\n");
+    //printf("[handle_undecided_case] Entering undecided case handler.\n");
 
     // Jump forward by the window size in the phaseAngle array
     buffer_manager.current_phase_index += buffer_manager.window_size;
@@ -502,7 +480,7 @@ void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size)
 /**
  * @brief Verifies the detected peak using the find_and_verify_cubic_peak function.
  *
- * This function is triggered when the segment analysis detects a peak (ON_PEAK). It uses the current phase index
+ * This function is triggered when the segment analysis detects a peak (ON_PEAK). It uses the current buffer index
  * as the starting point for verifying the peak by calling the find_and_verify_cubic_peak function. If the peak
  * is verified successfully, it logs the result.
  *
@@ -510,21 +488,23 @@ void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size)
  * @param phase_angle_size The size of the phase angle array.
  * @param start_index The starting index for peak verification.
  */
-void verify_peak_at_index(const MqsRawDataPoint_t *phaseAngles, uint16_t phase_angle_size, uint16_t start_index) {
-    printf("[verify_peak_at_index] Verifying peak at phase index: %d\n", start_index);
-    
-    // Call the find_and_verify_cubic_peak function
+void verify_peak_at_index(uint16_t buffer_start_index) {
+    printf("[verify_peak_at_index] Verifying peak at buffer index: %d\n", buffer_start_index);
+
+    // Call the find_and_verify_cubic_peak function using the current buffer index
     CubicPeakAnalysisResult peak_result = find_and_verify_cubic_peak(
-        phaseAngles,           // Pointer to phase angle data
-        phase_angle_size,      // Total size of the phase angle data
-        start_index,           // Start index for peak verification
-        0.5                    // Forgetting factor for RLS analysis
+        buffer_manager.buffer,  // Pointer to the buffer
+        buffer_manager.buffer_size,  // Total buffer size
+        buffer_start_index,      // Current buffer index for peak verification
+        1.0                      // Forgetting factor for RLS analysis
     );
 
     if (peak_result.peak_found) {
-        printf("[verify_peak_at_index] Verified peak found at index: %d\n", peak_result.peak_index);
+        // Adjust the peak index to match the real phaseAngle array
+        uint16_t real_peak_index = buffer_manager.current_phase_index + (peak_result.peak_index - buffer_start_index);
+        printf("[verify_peak_at_index] Verified peak found at real phaseAngle index: %d\n", real_peak_index);
     } else {
-        printf("[verify_peak_at_index] Peak verification failed at index: %d\n", start_index);
+        printf("[verify_peak_at_index] Peak verification failed at buffer index: %d\n", buffer_start_index);
     }
 }
 
@@ -546,7 +526,7 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
     int16_t direction = UNDECIDED;
 
     // Step 1: Load the initial window of values into the buffer
-    load_initial_buffer(phaseAngles, phase_angle_size);
+    load_initial_buffer(phaseAngles, phase_angle_size); //STATE 1 
 
     // Step 2: Debugging: Log the buffer manager state
     printf("[DEBUG] Buffer Manager State after initial loading:\n");
@@ -556,7 +536,7 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
     printf("Buffer size: %d\n", buffer_manager.buffer_size);
 
     // Step 3: Pass the starting point of the buffer (window) to the segment analysis
-    SegmentAnalysisResult result = segment_trend_and_concavity_analysis(
+    SegmentAnalysisResult result = segment_trend_and_concavity_analysis(   //PART OF STATE 1. 
         &buffer_manager.buffer[buffer_manager.current_buffer_index],
         buffer_manager.window_size,
         0.5
@@ -571,23 +551,26 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
     // Step 5: Determine initial direction based on analysis
     direction = result.nextDirection;
 
-    // Step 6: If a peak is detected right away, log and exit
-    if (direction == ON_PEAK) {
-        printf("Peak detected immediately at phase index: %d\n", buffer_manager.current_phase_index);
-        return; // No need to enter the while loop if peak is already found
+    if (direction == ON_PEAK) {  //IF STATE 1 RESULTS AS ON_PEAK THIS SHOULD BE ANOTHER STATE: STATE 4.
+    printf("Peak detected immediately at buffer index: %d\n", buffer_manager.current_buffer_index);
+        
+        // Pass the current buffer index to verify_peak_at_index
+    verify_peak_at_index(buffer_manager.current_buffer_index);  //STATE 4. 
+    return;  // No need to continue if the peak is found
     }
-
+    
     printf("Initial direction determined: %d\n", direction);
 
     // Step 7: Enter the sliding window logic if peak wasn't found immediately
     bool run_once = false;  // Set to true for single iteration, false for indefinite execution
+
 
     while ((direction != ON_PEAK && buffer_manager.current_phase_index >= 0 && buffer_manager.current_phase_index < phase_angle_size)) {
 
         // Step 8: If the result is undecided, handle it by jumping forward in the phaseAngle array
         if (direction == UNDECIDED) {
             printf("[perform_sliding_window_analysis] Result was undecided, handling undecided case.\n");
-            handle_undecided_case(phaseAngles, phase_angle_size);
+            handle_undecided_case(phaseAngles, phase_angle_size);      //STATE 3. UNDECIDED CASE SHOULD BE ITS OWN STATE. 
             result = segment_trend_and_concavity_analysis(
                 &buffer_manager.buffer[buffer_manager.current_buffer_index],
                 buffer_manager.window_size,
@@ -605,7 +588,7 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
 
         // Step 9: Load the next window of values into the buffer based on the direction
         printf("Updating buffer for direction: %d\n", direction);
-        update_buffer_for_direction(phaseAngles, direction);
+        update_buffer_for_direction(phaseAngles, direction); //PART OF STATE 2.
 
         // Debugging: Log the buffer contents after the update
         /*
@@ -623,7 +606,7 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
         printf("Buffer size: %d\n", buffer_manager.buffer_size);
 
         // Step 10: Pass the correct window into the analysis (sliding window)
-        result = segment_trend_and_concavity_analysis(
+        result = segment_trend_and_concavity_analysis( //PART OF STATE 2. 
             &buffer_manager.buffer[buffer_manager.current_buffer_index],
             buffer_manager.window_size,
             0.5
@@ -638,12 +621,13 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
         // Step 11: Update direction based on the result of analysis
         direction = result.nextDirection;
 
-        // If a peak is detected, log and break the loop
-        if (direction == ON_PEAK) {
-            // Call verify_peak_at_index to verify the detected peak
-            verify_peak_at_index(phaseAngles, phase_angle_size, buffer_manager.current_phase_index);
-            break; // Exit the loop after peak detection
+        // If the peak is detected, verify it and break the loop
+        if (direction == ON_PEAK) {  //STATE 2 may EXTEND TO HERE. 
+            printf("Peak detected at buffer index: %d\n", buffer_manager.current_buffer_index);
             
+            // Pass the current buffer index to verify_peak_at_index
+            verify_peak_at_index(buffer_manager.current_buffer_index); //STATE 4. 
+            break;
         }
 
         printf("Moving to the %s based on analysis.\n", (direction == LEFT_SIDE) ? "left" : "right");
@@ -661,7 +645,3 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
     printf("Current phase index: %d\n", buffer_manager.current_phase_index);
 }
 
-
-
-//indexleri düzgün ayarla
-//undecided için bir case ayarla. 

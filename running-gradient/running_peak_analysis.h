@@ -76,5 +76,7 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
  */
 void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_angle_size);
 
+void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index);
+
 
 #endif // RUNNING_PEAK_ANALYSIS_H

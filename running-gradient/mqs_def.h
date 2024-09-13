@@ -10,7 +10,7 @@ typedef struct {
     float impedance;
 } MqsRawDataPoint_t;
 
-typedef struct {
+typedef struct { 
     float startFrequency;
     float frequencyIncrement;
     uint16_t dataCount;

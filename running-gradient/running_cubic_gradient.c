@@ -8,6 +8,8 @@
 #include "running_cubic_gradient.h"
 #include "rls_analysis_parameters.h"
 
+#include "running_peak_analysis.h"
+
 
 /**
  * @brief Initializes the RunningCubicGradient structure for cubic regression using Recursive Least Squares (RLS).
@@ -260,7 +262,52 @@ void compute_cubic_second_order_gradients(double *second_order_gradients, const 
 }
 
 
-#define MINIMUM_REQUIRED_TREND_COUNT 2
+/**
+ * @brief Adds new values to the buffer for peak verification without altering current indices.
+ *
+ * This function extends the buffer either to the left or right, adding values from `phaseAngles` without
+ * changing the current phase or buffer indices. This is useful for peak verification when the analysis
+ * exceeds the buffer window boundaries.
+ *
+ * @param phaseAngles Pointer to the phase angles array.
+ * @param direction Direction to extend the buffer (LEFT_SIDE or RIGHT_SIDE).
+ * @param num_values Number of values to add (e.g., 10).
+ */
+void extend_buffer_for_peak_verification(const double* phaseAngles, int direction, uint16_t num_values) {
+    int16_t buffer_start_index = buffer_manager.current_buffer_index;
+    int16_t phase_index_start = buffer_manager.current_phase_index;
+
+    if (direction == LEFT_SIDE) {
+        // Add values to the left side of the buffer
+        phase_index_start -= num_values;
+
+        if (phase_index_start < 0) {
+            printf("[extend_buffer] Out of bounds: Cannot add more values on the left.\n");
+            return;
+        }
+
+        // Add new values from the phaseAngles array into the buffer without changing indices
+        update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index - num_values);
+        printf("[extend_buffer] Added %u values to the left for peak verification.\n", num_values);
+
+    } else if (direction == RIGHT_SIDE) {
+        // Add values to the right side of the buffer
+        phase_index_start += buffer_manager.window_size; // Move to the right
+
+        if (phase_index_start + num_values > buffer_manager.buffer_size) {
+            printf("[extend_buffer] Out of bounds: Cannot add more values on the right.\n");
+            return;
+        }
+
+        // Add new values from the phaseAngles array into the buffer without changing indices
+        update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index + buffer_manager.window_size);
+        printf("[extend_buffer] Added %u values to the right for peak verification.\n", num_values);
+    }
+}
+
+#define MINIMUM_REQUIRED_TREND_COUNT 5
+#define ALLOWABLE_INCONSISTENCY_COUNT 2  // Allowable number of inconsistencies (one break)
+
 
 /**
  * @brief Verifies the detected peak by checking for a consistent trend of increases on the left side
@@ -285,6 +332,8 @@ bool verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, const d
     uint16_t right_trend_count = 0;
     bool left_truncated = false;
     bool right_truncated = false;
+    uint16_t inconsistency_count_left = 0;
+    uint16_t inconsistency_count_right = 0;
 
     // Count increasing trends on the left side of the peak
     for (uint16_t i = peak_index; i > 0; --i) {
@@ -292,7 +341,16 @@ bool verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, const d
             left_trend_count++;
             if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
         } else {
-            if (i == 1) left_truncated = true;  // If we hit the start of the window
+            inconsistency_count_left++;
+            if (inconsistency_count_left > ALLOWABLE_INCONSISTENCY_COUNT) {
+                if (i == 1) left_truncated = true;  // If we hit the start of the window
+                break;
+            }
+        }
+
+        // Check for truncation with at least 3 consistent trends
+        if (i == 1 && left_trend_count >= 3) {
+            left_truncated = true;
             break;
         }
     }
@@ -303,47 +361,34 @@ bool verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, const d
             right_trend_count++;
             if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
         } else {
-            if (i == CUBIC_RLS_WINDOW - 2) right_truncated = true;  // If we hit the end of the window
+            inconsistency_count_right++;
+            if (inconsistency_count_right > ALLOWABLE_INCONSISTENCY_COUNT) {
+                if (i == CUBIC_RLS_WINDOW - 2) right_truncated = true;  // If we hit the end of the window
+                break;
+            }
+        }
+
+        // Check for truncation with at least 3 consistent trends
+        if (i == CUBIC_RLS_WINDOW - 2 && right_trend_count >= 3) {
+            right_truncated = true;
             break;
         }
     }
 
     printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
 
-    // If verification was truncated on the left side, attempt to re-verify by shifting the window left
-    if (left_truncated && left_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index >= 10) {
-        printf("Left truncation detected, shifting window 10 points to the left for re-verification...\n");
-        uint16_t new_start_index = start_index - 10;
-        double shifted_gradients[CUBIC_RLS_WINDOW];
-        compute_cubic_second_order_gradients(shifted_gradients, values, length, new_start_index, forgetting_factor);
-
-        // Recount increasing trends on the left side of the peak
-        for (uint16_t i = 10; i > 0; --i) {
-            if (shifted_gradients[i - 1] > 0) {
-                left_trend_count++;
-                if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-            } else {
-                break;
-            }
-        }
+    // If verification was truncated on the left side after at least 3 consistent trends, extend buffer to the left
+    if (left_truncated && left_trend_count >= 3) {
+        printf("Left truncation detected, extending buffer with new values to the left...\n");
+        extend_buffer_for_peak_verification(values, LEFT_SIDE, 10);  // Add 10 values to the left for verification
+        return verify_cubic_peak(values, length, second_order_gradients, peak_index, start_index, forgetting_factor);  // Re-run verification
     }
 
-    // If verification was truncated on the right side, attempt to re-verify by shifting the window right
-    if (right_truncated && right_trend_count < MINIMUM_REQUIRED_TREND_COUNT && start_index + CUBIC_RLS_WINDOW <= length - 10) {
-        printf("Right truncation detected, shifting window 10 points to the right for re-verification...\n");
-        uint16_t new_start_index = start_index + 10;
-        double shifted_gradients[CUBIC_RLS_WINDOW];
-        compute_cubic_second_order_gradients(shifted_gradients, values, length, new_start_index, forgetting_factor);
-
-        // Recount decreasing trends on the right side of the peak
-        for (uint16_t i = 10; i < 20; ++i) {
-            if (shifted_gradients[i] < 0) {
-                right_trend_count++;
-                if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-            } else {
-                break;
-            }
-        }
+    // If verification was truncated on the right side after at least 3 consistent trends, extend buffer to the right
+    if (right_truncated && right_trend_count >= 3) {
+        printf("Right truncation detected, extending buffer with new values to the right...\n");
+        extend_buffer_for_peak_verification(values, RIGHT_SIDE, 10);  // Add 10 values to the right for verification
+        return verify_cubic_peak(values, length, second_order_gradients, peak_index, start_index, forgetting_factor);  // Re-run verification
     }
 
     // Verify if the peak meets the criteria
