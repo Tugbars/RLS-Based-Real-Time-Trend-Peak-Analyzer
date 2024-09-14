@@ -191,6 +191,121 @@ double calculate_second_order_gradient(const RunningQuadraticGradient *rg) {
 	return second_order_gradient;
 }
 
+/**
+ * @brief Verifies the detected peak by checking for a consistent trend of increases on the left side
+ * and decreases on the right side, with additional checks and adjustments for truncated data using quadratic RLS.
+ *
+ * This function verifies whether a detected peak is a true peak by analyzing the second-order gradients
+ * calculated using quadratic regression. Specifically, it checks for a consistent increasing trend on the left
+ * side and a decreasing trend on the right side of the peak.
+ *
+ * @param values Array of data points.
+ * @param length Length of the data array.
+ * @param second_order_gradients Array containing the precomputed second-order gradients.
+ * @param peak_index The index of the detected peak within the second_order_gradients array.
+ * @param start_index The starting index in the original data array corresponding to the first element of second_order_gradients.
+ * @param forgetting_factor The forgetting factor used in the RLS algorithm.
+ * @return bool True if the peak is verified based on the trend analysis, false otherwise.
+ */
+bool verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, const double *second_order_gradients, uint16_t peak_index, uint16_t start_index, double forgetting_factor) {
+    uint16_t left_trend_count = 0;
+    uint16_t right_trend_count = 0;
+    uint16_t inconsistency_count_left = 0;
+    uint16_t inconsistency_count_right = 0;
+
+    // Count increasing trends on the left side of the peak
+    for (int i = peak_index; i > 0; --i) {
+        if (second_order_gradients[i - 1] > 0) {
+            left_trend_count++;
+            if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
+        } else {
+            inconsistency_count_left++;
+            if (inconsistency_count_left > ALLOWABLE_INCONSISTENCY_COUNT) {
+                break;
+            }
+        }
+    }
+
+    // Count decreasing trends on the right side of the peak
+    for (uint16_t i = peak_index; i < RLS_WINDOW - 1; ++i) {
+        if (second_order_gradients[i + 1] < 0) {
+            right_trend_count++;
+            if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
+        } else {
+            inconsistency_count_right++;
+            if (inconsistency_count_right > ALLOWABLE_INCONSISTENCY_COUNT) {
+                break;
+            }
+        }
+    }
+
+    printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
+
+    // Verify if the peak meets the criteria
+    return left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT && right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT;
+}
+
+/**
+ * @brief Finds and verifies a peak in the data using quadratic RLS.
+ *
+ * This function first detects a peak using second-order gradients calculated from quadratic regression,
+ * and then verifies the peak using the `verify_quadratic_peak` function. The peak is considered valid
+ * only if it meets the trend criteria on both sides of the peak.
+ *
+ * @param values Array of data points.
+ * @param length Length of the data array.
+ * @param start_index The start index in the data array from which to begin the gradient calculation.
+ * @param forgetting_factor The forgetting factor used in the RLS algorithm.
+ * @return QuadraticPeakAnalysisResult Structure containing the peak detection status and the peak index if found and verified.
+ */
+QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
+    QuadraticPeakAnalysisResult result = { .peak_found = false, .peak_index = 0 };
+
+    // Declare the second_order_gradients array
+    double second_order_gradients[RLS_WINDOW];
+
+    // Initialize the running quadratic gradient structure
+    RunningQuadraticGradient rg;
+    init_running_quadratic_gradient(&rg, forgetting_factor);
+
+    // Compute the second-order gradients
+    for (uint16_t i = 0; i < RLS_WINDOW && (start_index + i) < length; ++i) {
+        const MqsRawDataPoint_t *current_value = &values[start_index + i];
+        add_quadratic_data_point(&rg, current_value);
+
+        // Calculate the second-order gradient only if we have at least 3 data points
+        if (rg.num_points >= 3) {
+            double second_order_gradient = calculate_second_order_gradient(&rg);
+            second_order_gradients[i] = second_order_gradient;
+        } else {
+            second_order_gradients[i] = NAN;  // Not enough points yet to calculate the gradient
+        }
+    }
+
+    // Find and verify the peak based on the computed gradients
+    for (uint16_t i = 1; i < RLS_WINDOW; ++i) {
+        if (second_order_gradients[i - 1] > 0 && second_order_gradients[i] < 0) {
+            // Temporarily set the peak index
+            result.peak_index = start_index + i;
+
+            // Verify the detected peak
+            if (verify_quadratic_peak(values, length, second_order_gradients, i, start_index, forgetting_factor)) {
+                result.peak_found = true;
+                printf("Verified peak found at index %u\n", result.peak_index);
+                break; // Exit the loop once a verified peak is found
+            } else {
+                printf("Peak at index %u did not pass verification. Continuing search...\n", result.peak_index);
+                result.peak_found = false; // Reset peak_found as the peak failed verification
+            }
+        }
+    }
+
+    if (!result.peak_found) {
+        printf("No verified peak found in the specified window.\n");
+    }
+
+    return result;
+}
 
 /**
  * @brief Computes the second-order gradients for the next 30 values in the given array.
@@ -205,132 +320,52 @@ double calculate_second_order_gradient(const RunningQuadraticGradient *rg) {
  * @param forgetting_factor The forgetting factor for the RLS algorithm.
  * @return An array of double containing the second-order gradients.
  */
-double* compute_second_order_gradients(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
-    // Ensure that the start index and the length allow for 30 calculations
+double compute_total_second_order_gradient(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
+    // Ensure that the start index and the length allow for RLS_WINDOW calculations
     if (start_index + RLS_WINDOW > length) {
-        printf("Insufficient data to compute 30 second-order gradients from the starting index.\n");
-        return NULL;
-    }
-
-    // Allocate memory for the result array
-    double *second_order_gradients = (double *)malloc(RLS_WINDOW * sizeof(double));
-    if (second_order_gradients == NULL) {
-        fprintf(stderr, "Memory allocation failed.\n");
-        return NULL;
+        printf("Insufficient data to compute %d second-order gradients from the starting index.\n", RLS_WINDOW);
+        return NAN;
     }
 
     // Initialize the running quadratic gradient structure
     RunningQuadraticGradient rg;
     init_running_quadratic_gradient(&rg, forgetting_factor);
 
-    // Loop through the next 30 values starting from start_index
+    double total_sum_gradients = 0.0; // Initialize total sum of gradients
+   
+    // Loop through the next RLS_WINDOW values starting from start_index
     for (uint16_t i = 0; i < RLS_WINDOW; ++i) {
         const MqsRawDataPoint_t *current_value = &values[start_index + i];
 
         // Add the current value's phaseAngle to the running quadratic gradient
         add_quadratic_data_point(&rg, current_value);
 
-        #ifdef DEBUG_GRADIENT_CALC
-        // Print the current phase angle added
-        printf("Added phase angle: %.6f\n", current_value->phaseAngle);
-        #endif
-
         // Calculate the second-order gradient only if we have at least 3 data points
         if (rg.num_points >= 3) {
             double second_order_gradient = calculate_second_order_gradient(&rg);
-            second_order_gradients[i] = second_order_gradient;
 
-            #ifdef DEBUG_GRADIENT_CALC
-            // Print the current second-order gradient
-            printf("Second-order gradient after adding phase angle %.6f: %.6f\n", current_value->phaseAngle, second_order_gradient);
-            #endif
+            // Accumulate the total sum of gradients
+            total_sum_gradients += second_order_gradient;
+
+            // Optionally store the gradient in scratch space (if needed elsewhere in the function)
+            //second_order_gradients[i] = second_order_gradient;
+
+            // Optionally, print the total sum of gradients as it is adding new values
+            //printf("Total sum of gradients after adding phase angle %.6f: %.6f\n", current_value->phaseAngle, total_sum_gradients);
+
+            // Optionally, print the current second-order gradient
+            //printf("Second-order gradient after adding phase angle %.6f: %.6f\n", current_value->phaseAngle, second_order_gradient);
         } else {
-            second_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
+            // Optionally, handle the case when not enough data points are available
+            //second_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
 
-            #ifdef DEBUG_GRADIENT_CALC
-            // Print a message indicating insufficient data
-            printf("Not enough data points to calculate the gradient after adding phase angle %.6f.\n", current_value->phaseAngle);
-            #endif
+            // Optionally, print a message indicating insufficient data
+            //printf("Not enough data points to calculate the gradient after adding phase angle %.6f.\n", current_value->phaseAngle);
         }
     }
 
-    return second_order_gradients;
-}
-
-
-/**
- * @brief Computes the first-order gradients (slopes) for the next 30 values in the given array.
- *
- * This function takes an array of doubles and a starting index, then adds each of the next 30 values
- * to the RunningQuadraticGradient structure. After each addition, it computes the first-order gradient
- * (slope) of the quadratic model. The function returns an array containing these first-order gradients.
- *
- * The function is wrapped with preprocessor directives (`#ifdef DEBUG_GRADIENT_CALC`) that control
- * whether the internal state and computations are printed for debugging purposes. To enable the debug
- * output, define the `DEBUG_GRADIENT_CALC` macro before compiling or at the top of your source file.
- *
- * @param values Array of double values from which the gradients are computed.
- * @param length Length of the array.
- * @param start_index Starting index in the array from which to begin the gradient calculation.
- * @param forgetting_factor The forgetting factor for the Recursive Least Squares (RLS) algorithm, 
- *                          typically a value close to 1, which determines the weight given to newer data points.
- * 
- * @return An array of doubles containing the first-order gradients, or NULL if there is insufficient data or 
- *         a memory allocation failure. The caller is responsible for freeing the allocated memory.
- */
-double* compute_first_order_gradients(const MqsRawDataPoint_t *values, size_t length, size_t start_index, double forgetting_factor) {
-    // Ensure that the start index and the length allow for 30 calculations
-    if (start_index + RLS_WINDOW > length) {
-        fprintf(stderr, "Insufficient data to compute 30 first-order gradients from the starting index.\n");
-        return NULL;
-    }
-
-    // Allocate memory for the result array
-    double *first_order_gradients = (double *)malloc(RLS_WINDOW * sizeof(double));
-    if (first_order_gradients == NULL) {
-        fprintf(stderr, "Memory allocation failed.\n");
-        return NULL;
-    }
-
-    // Initialize the running quadratic gradient structure
-    RunningQuadraticGradient rg;
-    init_running_quadratic_gradient(&rg, forgetting_factor);
-
-    // Loop through the next 30 values starting from start_index
-    for (size_t i = 0; i < RLS_WINDOW; ++i) {
-        uint16_t current_index = start_index + i;
-        const MqsRawDataPoint_t *current_value = &values[current_index];  // Correctly use MqsRawDataPoint_t
-
-        // Add the current data point to the running quadratic gradient
-        add_quadratic_data_point(&rg, current_value);
-
-        #ifdef DEBUG_GRADIENT_CALC
-        // Print the phaseAngle of the current value added
-        printf("Added value: %.6f\n", current_value->phaseAngle);
-        #endif
-
-        // Calculate the first-order gradient only if we have at least 2 data points
-        if (rg.num_points >= 2) {
-            // Calculate the first-order gradient (slope) at the current x value
-            double x_current = (double)(rg.num_points - 1); // Current x value
-            double first_order_gradient = calculate_slope_at_point(&rg, x_current);
-            first_order_gradients[i] = first_order_gradient;
-
-            #ifdef DEBUG_GRADIENT_CALC
-            // Print the current first-order gradient
-            printf("First-order gradient after adding value %.6f: %.6f\n", current_value->phaseAngle, first_order_gradient);
-            #endif
-        } else {
-            first_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
-
-            #ifdef DEBUG_GRADIENT_CALC
-            // Print a message indicating insufficient data
-            printf("Not enough data points to calculate the gradient after adding value %.6f.\n", current_value->phaseAngle);
-            #endif
-        }
-    }
-
-    return first_order_gradients;
+    // Return the total sum of the second-order gradients
+    return total_sum_gradients;
 }
 
 /**
@@ -487,7 +522,8 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
                 #ifdef DEBUG
                 printf("Stopped tracking decrease due to consecutive increases at index %zu\n", start_index + i);
                 #endif
-                break;
+                increase_count = 0;
+                //break;
             }
         }
 
@@ -545,8 +581,8 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
     
     printf("track_gradient_trends_with_quadratic_regression called with arguments:\n");
     //printf("  length: %u\n", length);
-    printf("  start_index: %u\n", start_index);
-    printf("  window_size: %u\n", window_size);
+    //printf("  start_index: %u\n", start_index);
+    //printf("  window_size: %u\n", window_size);
     //printf("  forgetting_factor: %.6f\n", forgetting_factor);
 
     // Ensure that the start index and the window size allow for calculations
@@ -558,7 +594,7 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
     }
 
     // Array to store the second-order gradients
-    double second_order_gradients[window_size];
+    double second_order_gradients[RLS_WINDOW];
 
     // Initialize the running quadratic gradient structure
     RunningQuadraticGradient rg;
@@ -602,205 +638,3 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
     return trend_result;
 }
 
-
-
-
-/**
- * @brief Performs initial concavity analysis by summing the second-order gradients for every 10 points in the RLS window.
- *
- * This function computes the sum of second-order gradients over every 10 points within the RLS window,
- * starting from the provided `start_index`. The results are returned in a `ConcavityAnalysisResult` structure.
- * The function also allows for re-initialization of the `RunningQuadraticGradient` structure after every 10 points,
- * depending on the value of the `reinitialize_after_each_segment` parameter.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The starting index for gradient calculations.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @param reinitialize_after_each_segment Boolean flag to control whether to re-initialize after every 10 data points.
- * @return A `ConcavityAnalysisResult` structure containing the sums of second-order gradients for each 10-point segment.
-
-ConcavityAnalysisResult initial_concavity_analysis(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor, bool reinitialize_after_each_segment) {
-    ConcavityAnalysisResult result = { .sums = {0.0} };
-
-    // Ensure that the start index and the length allow for the analysis
-    if (start_index + RLS_WINDOW > length) {
-        printf("Insufficient data for initial concavity analysis.\n");
-        return result;
-    }
-
-    RunningQuadraticGradient rg;
-    init_running_quadratic_gradient(&rg, forgetting_factor);
-
-    // Loop through the RLS window in segments of 10 points
-    for (uint16_t i = 0; i < RLS_WINDOW; i += 10) {
-        if (reinitialize_after_each_segment) {
-            // Re-initialize the running quadratic gradient structure
-            init_running_quadratic_gradient(&rg, forgetting_factor);
-        }
-
-        double sum = 0.0;
-        uint16_t valid_point_count = 0;
-
-        // Process each segment of 10 points
-        for (uint16_t j = i; j < i + 10 && j < RLS_WINDOW; ++j) {
-            const MqsRawDataPoint_t *current_value = &values[start_index + j];
-            add_quadratic_data_point(&rg, current_value);
-
-            if (rg.num_points >= 3 && !isnan(rg.coefficients[0])) { // Ensure at least 3 points before calculating
-                double second_order_gradient = calculate_second_order_gradient(&rg);
-                sum += second_order_gradient;
-                valid_point_count++;
-            } else {
-                //printf("Skipping index %u due to insufficient data points or NaN.\n", j);
-            }
-        }
-
-        // Only record the sum if it was computed with at least one valid point
-        if (valid_point_count > 0) {
-            result.sums[i / 10] = sum;
-            printf("Sum of second-order gradients from index %u to %u: %.6f\n", start_index + i, start_index + i + 9, sum);
-        } else {
-            result.sums[i / 10] = NAN;
-            //printf("Insufficient data to calculate sum for segment %u.\n", i / 10 + 1);
-        }
-    }
-
-    return result;
-}
- */
-
-/**
- * @brief Analyzes the behavior of the three segments and determines the necessary action based on concavity.
- *
- * This function examines the sum of second-order gradients for each of the three segments within a window of data 
- * and determines the overall pattern of concavity. It returns a `ConcavityAnalysisOutput` structure that 
- * encapsulates the suggested actions (`moveLeft`, `moveRight`, `stay`, `isNoisy`) and flags for potential and true peaks.
- *
- * The function first categorizes each segment as increasing, slightly increasing, or decreasing based on thresholds.
- * It then combines these categorizations into a ternary pattern, which is used to determine the appropriate response.
- *
- * The possible actions include:
- * - `moveLeft`: Indicates that the analysis suggests moving left.
- * - `moveRight`: Indicates that the analysis suggests moving right.
- * - `stay`: Indicates that the analysis suggests staying in the current position.
- * - `isNoisy`: Indicates that the segment might be noisy.
- *
- * Additionally, the function can detect potential and true peaks:
- * - `isPotentialPeak`: Set to true if a potential peak is detected.
- * - `isTruePeak`: Set to true if a true peak is detected.
- *
- * @param concavity_result The `ConcavityAnalysisResult` containing the sums of the second-order gradients.
- * @return A `ConcavityAnalysisOutput` structure containing the analysis results and suggested actions.
-
-ConcavityAnalysisOutput analyze_concavity_segments(const ConcavityAnalysisResult *concavity_result) {
-    ConcavityAnalysisOutput output = {false, false, false, false, false, false};  // Initialize all fields to false
-
-    if (isnan(concavity_result->sums[0]) || isnan(concavity_result->sums[1]) || isnan(concavity_result->sums[2])) {
-        printf("Insufficient data for determining concavity pattern.\n");
-        return output;
-    }
-
-    // Define thresholds for categorizing the gradient sums
-    double increase_threshold = quadratic_analysis_params.minimum_second_order_gradient_sum;
-    double small_increase_threshold = 0.0;
-
-    // Map to 2 (increase), 1 (small increase), or 0 (decrease)
-    int first_segment = concavity_result->sums[0] > increase_threshold ? 2 :
-                        (concavity_result->sums[0] > small_increase_threshold ? 1 : 0);
-    int second_segment = concavity_result->sums[1] > increase_threshold ? 2 :
-                         (concavity_result->sums[1] > small_increase_threshold ? 1 : 0);
-    int third_segment = concavity_result->sums[2] > increase_threshold ? 2 :
-                        (concavity_result->sums[2] > small_increase_threshold ? 1 : 0);
-                        
-    printf("%d %d %d\n", first_segment, second_segment, third_segment);
-
-    // Create a ternary pattern based on the segments (using 2 as increase, 1 as small increase, 0 as decrease)
-    int pattern = (first_segment * 9) + (second_segment * 3) + third_segment;
-
-    // Switch on the ternary pattern to determine the concavity pattern
-    switch (pattern) {
-        case 25: // 2, 2, 1: INCREASE, INCREASE, SMALL INCREASE 
-        case 24: // 2, 2, 0: INCREASE, INCREASE, DECREASE
-            // The curve is increasing initially but then either slows down (small increase) or starts to decrease.
-            // This suggests that the peak might be close or reached soon, so we suggest moving to the right.
-            output.isPotentialPeak = true;
-            output.moveRight = true;
-            break;
-
-        case 23: // 2, 1, 2: INCREASE, SMALL INCREASE, INCREASE
-        case 22: // 2, 1, 1: INCREASE, SMALL INCREASE, SMALL INCREASE 
-        case 21: // 2, 1, 0: INCREASE, SMALL INCREASE, DECREASE
-            // These patterns are noisy, indicating some fluctuations around a possible peak.
-            // The suggestion is to move to the right, but we mark it as noisy.
-            output.isPotentialPeak = true;
-            output.moveRight = true;
-            output.isNoisy = true;
-            break;
-
-        case 20: // 2, 0, 2: INCREASE, DECREASE, INCREASE
-            // This pattern is indicative of a noisy situation where the curve dips and then rises again.
-            // We suggest staying in the current position and mark it as noisy.
-            output.isPotentialPeak = true;
-            output.stay = true;
-            output.isNoisy = true;
-            break;
-
-        case 18: // 2, 0, 0: INCREASE, DECREASE, DECREASE
-            // The curve has increased and then started decreasing consistently.
-            // This is a strong indication that the peak has been reached, so we suggest moving left to center on the peak.
-            output.isPotentialPeak = true;
-            output.isTruePeak = true;
-            output.moveLeft = true;
-            break;
-
-        case 14: // 1, 2, 2: SMALL INCREASE, INCREASE, INCREASE
-            // The curve is consistently increasing after a small initial increase.
-            // This suggests that we are on the left side of the peak and should move right.
-            output.moveRight = true;
-            break;
-
-        case 11: // 1, 0, 2: SMALL INCREASE, DECREASE, INCREASE 
-        case 9:  // 0, 2, 2: DECREASE, INCREASE, INCREASE
-            // These patterns indicate that the curve decreased initially but is now increasing.
-            // This suggests that we are on the right side of the peak, so we should move left.
-            output.moveLeft = true;
-            break;
-
-        case 10: // 1, 0, 0: SMALL INCREASE, DECREASE, DECREASE
-        case 7:  // 0, 2, 0: DECREASE, INCREASE, DECREASE
-            // These are noisy patterns with fluctuations indicating a potential peak.
-            // We suggest moving left and mark it as noisy.
-            output.isPotentialPeak = true;
-            output.moveLeft = true;
-            output.isNoisy = true;
-            break;
-
-        case 4:  // 0, 0, 2: DECREASE, DECREASE, INCREASE 
-            // The curve decreased initially but is now increasing, suggesting that we are on the right side of the peak.
-            // We suggest moving left.
-            output.moveLeft = true;
-            break;
-
-        case 0:  // 0, 0, 0: DECREASE, DECREASE, DECREASE
-            // The curve is consistently decreasing, suggesting that we are past the peak.
-            // We suggest moving left and mark it as the true peak.
-            output.isTruePeak = true;
-            output.moveLeft = true;
-            break;
-
-        case 26: // 2, 2, 2: INCREASE, INCREASE, INCREASE
-            // The curve is consistently increasing, indicating that we are on the left side of the peak.
-            // We suggest moving right.
-            output.moveRight = true;
-            break;
-
-        default:
-            // If the pattern does not match any of the predefined cases, we mark it as noisy.
-            output.isNoisy = true;
-            break;
-    }
-
-    return output;
-}
- */ 

@@ -78,5 +78,12 @@ void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_a
 
 void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index);
 
+void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size);
+
+void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount);
+
+void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
+
+void verify_peak_at_index(uint16_t buffer_start_index);
 
 #endif // RUNNING_PEAK_ANALYSIS_H

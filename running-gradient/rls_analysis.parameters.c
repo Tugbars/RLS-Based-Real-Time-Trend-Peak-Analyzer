@@ -71,6 +71,8 @@ void init_cubic_rls_analysis_parameters(double significance_thresh, uint16_t dur
 void init_quadratic_rls_analysis_parameters(double min_gradient_sum, int max_decrease_count, int max_increase_count) {
     quadratic_analysis_params.minimum_second_order_gradient_sum = min_gradient_sum;
     quadratic_analysis_params.max_second_order_trend_decrease_count = max_decrease_count;
+    printf("max_second_order_trend_decrease_count: %d\n", quadratic_analysis_params.max_second_order_trend_decrease_count);
+
     quadratic_analysis_params.max_second_order_trend_increase_count = max_increase_count;
 }
 

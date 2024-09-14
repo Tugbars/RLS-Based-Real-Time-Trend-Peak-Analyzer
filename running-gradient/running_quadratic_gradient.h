@@ -8,15 +8,13 @@
 
 // Constants
 #define RLS_WINDOW 30   // Define a constant for the window size
+#define MINIMUM_REQUIRED_TREND_COUNT 5
+#define ALLOWABLE_INCONSISTENCY_COUNT 2  // Allowable number of inconsistencies
 
-/**
- * @brief Structure to store the result of the concavity analysis.
- *
- * This structure contains the sum of second-order gradients for every 10 points within the RLS window.
- */
 typedef struct {
-    double sums[RLS_WINDOW / 10]; /**< Array containing the sum of second-order gradients for each 10-point segment. */
-} ConcavityAnalysisResult;
+    bool peak_found;
+    uint16_t peak_index;
+} QuadraticPeakAnalysisResult;
 
 /**
  * @brief Enum to represent the different patterns of concavity across the three segments.
@@ -30,13 +28,15 @@ typedef struct {
     bool isTruePeak;       /**< Indicates if a true peak is detected */
 } ConcavityAnalysisOutput;
 
-double* compute_second_order_gradients(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
-
-ConcavityAnalysisResult initial_concavity_analysis(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor, bool reinitialize_after_each_segment);
-
-ConcavityAnalysisOutput analyze_concavity_segments(const ConcavityAnalysisResult *concavity_result);
 
 GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor);
+
+double compute_total_second_order_gradient(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
+
+/**
+ * @brief Finds and verifies a peak in the data using quadratic RLS.
+ */
+QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
 
 #endif // RUNNING_QUADRATIC_GRADIENT_H
 

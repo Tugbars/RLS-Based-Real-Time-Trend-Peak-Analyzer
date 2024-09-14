@@ -19,9 +19,10 @@ typedef enum {
     SWP_SEGMENT_ANALYSIS,
     SWP_UPDATE_BUFFER_DIRECTION,
     SWP_UNDECIDED_TREND_CASE,
+    SWP_PEAK_CENTERING,           // New state
     SWP_PEAK_FINDING_ANALYSIS,
     SWP_WAITING,
-    SWP_STATE_LAST  // Use this to track the number of states
+    SWP_STATE_LAST
 } SwpState_t;
 
 typedef struct {
@@ -33,6 +34,30 @@ typedef struct {
 
 // Function Declarations
 void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback);
-void SwpProcessStateChange(void);
 
 #endif // SLIDING_WINDOW_ANALYSIS_H
+
+//documentation
+
+/*
+
+******compare_gradient_parts************
+
+
+//  if (gradient > gradient_analysis_params.gradient_threshold) {  // Use globally defined threshold 
+ (*increase_count)++;
+buna göre countlanıyor. 
+
+double min_total = gradient_analysis_params.minimum_gradient_total;
+
+ // Check if both gradients are insignificant
+    if ((result->total_gradient_first_part > -min_total && result->total_gradient_first_part < min_total) &&
+        (result->total_gradient_second_part > -min_total && result->total_gradient_second_part < min_total)) {
+        return UNDECIDED;  // Both sides have insignificant gradients
+    }
+
+
+*************detect_significant_gradient_trends***************
+
+
+*/

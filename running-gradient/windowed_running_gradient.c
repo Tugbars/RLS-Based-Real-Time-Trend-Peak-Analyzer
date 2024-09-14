@@ -395,19 +395,19 @@ GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, u
     uint16_t middle_index = start_index + WINDOW_SIZE / 2;  // Middle of the window
 
     // Process the left side (first part)
-    printf("Processing the left side (first part) from %u to %u...\n", middle_index - (WINDOW_SIZE / 2), middle_index);
+    //printf("Processing the left side (first part) from %u to %u...\n", middle_index - (WINDOW_SIZE / 2), middle_index);
     process_gradient(&rg_left_part, data, middle_index - (WINDOW_SIZE / 2), middle_index, 
                      &result.total_gradient_first_part, &result.increase_count_first_part);
     result.probability_increase_first_part = calculate_probability(&rg_left_part);
 
     // Process the right side (second part)
-    printf("Processing the right side (second part) from %u to %u...\n", middle_index, middle_index + (WINDOW_SIZE / 2));
+    //printf("Processing the right side (second part) from %u to %u...\n", middle_index, middle_index + (WINDOW_SIZE / 2));
     process_gradient(&rg_right_part, data, middle_index, middle_index + (WINDOW_SIZE / 2), 
                      &result.total_gradient_second_part, &result.increase_count_second_part);
     result.probability_increase_second_part = calculate_probability(&rg_right_part);
 
     // Compare the results to determine the dominant side
-    printf("Comparing the results...\n");
+    //printf("Comparing the results...\n");
     result.dominant_side = determine_dominant_side(&result);
 
     switch (result.dominant_side) {

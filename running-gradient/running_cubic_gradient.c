@@ -261,187 +261,6 @@ void compute_cubic_second_order_gradients(double *second_order_gradients, const 
     }
 }
 
-
-/**
- * @brief Adds new values to the buffer for peak verification without altering current indices.
- *
- * This function extends the buffer either to the left or right, adding values from `phaseAngles` without
- * changing the current phase or buffer indices. This is useful for peak verification when the analysis
- * exceeds the buffer window boundaries.
- *
- * @param phaseAngles Pointer to the phase angles array.
- * @param direction Direction to extend the buffer (LEFT_SIDE or RIGHT_SIDE).
- * @param num_values Number of values to add (e.g., 10).
- */
-void extend_buffer_for_peak_verification(const double* phaseAngles, int direction, uint16_t num_values) {
-    int16_t buffer_start_index = buffer_manager.current_buffer_index;
-    int16_t phase_index_start = buffer_manager.current_phase_index;
-
-    if (direction == LEFT_SIDE) {
-        // Add values to the left side of the buffer
-        phase_index_start -= num_values;
-
-        if (phase_index_start < 0) {
-            printf("[extend_buffer] Out of bounds: Cannot add more values on the left.\n");
-            return;
-        }
-
-        // Add new values from the phaseAngles array into the buffer without changing indices
-        update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index - num_values);
-        printf("[extend_buffer] Added %u values to the left for peak verification.\n", num_values);
-
-    } else if (direction == RIGHT_SIDE) {
-        // Add values to the right side of the buffer
-        phase_index_start += buffer_manager.window_size; // Move to the right
-
-        if (phase_index_start + num_values > buffer_manager.buffer_size) {
-            printf("[extend_buffer] Out of bounds: Cannot add more values on the right.\n");
-            return;
-        }
-
-        // Add new values from the phaseAngles array into the buffer without changing indices
-        update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index + buffer_manager.window_size);
-        printf("[extend_buffer] Added %u values to the right for peak verification.\n", num_values);
-    }
-}
-
-#define MINIMUM_REQUIRED_TREND_COUNT 5
-#define ALLOWABLE_INCONSISTENCY_COUNT 2  // Allowable number of inconsistencies (one break)
-
-
-/**
- * @brief Verifies the detected peak by checking for a consistent trend of increases on the left side
- * and decreases on the right side, with additional checks and adjustments for truncated data using cubic RLS.
- *
- * This function verifies whether a detected peak is a true peak by analyzing the second-order gradients
- * calculated using cubic regression. Specifically, it checks for a consistent increasing trend on the left
- * side and a decreasing trend on the right side of the peak. If either side of the peak has insufficient
- * data points (due to reaching the boundaries of the analysis window), the function attempts to shift the
- * analysis window to obtain more data and re-verifies the trend consistency.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param second_order_gradients Array containing the precomputed second-order gradients.
- * @param peak_index The index of the detected peak within the second_order_gradients array.
- * @param start_index The starting index in the original data array corresponding to the first element of second_order_gradients.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return bool True if the peak is verified based on the trend analysis, false otherwise.
- */
-bool verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, const double *second_order_gradients, uint16_t peak_index, uint16_t start_index, double forgetting_factor) {
-    uint16_t left_trend_count = 0;
-    uint16_t right_trend_count = 0;
-    bool left_truncated = false;
-    bool right_truncated = false;
-    uint16_t inconsistency_count_left = 0;
-    uint16_t inconsistency_count_right = 0;
-
-    // Count increasing trends on the left side of the peak
-    for (uint16_t i = peak_index; i > 0; --i) {
-        if (second_order_gradients[i - 1] > 0) {
-            left_trend_count++;
-            if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-        } else {
-            inconsistency_count_left++;
-            if (inconsistency_count_left > ALLOWABLE_INCONSISTENCY_COUNT) {
-                if (i == 1) left_truncated = true;  // If we hit the start of the window
-                break;
-            }
-        }
-
-        // Check for truncation with at least 3 consistent trends
-        if (i == 1 && left_trend_count >= 3) {
-            left_truncated = true;
-            break;
-        }
-    }
-
-    // Count decreasing trends on the right side of the peak
-    for (uint16_t i = peak_index; i < CUBIC_RLS_WINDOW - 1; ++i) {
-        if (second_order_gradients[i + 1] < 0) {
-            right_trend_count++;
-            if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
-        } else {
-            inconsistency_count_right++;
-            if (inconsistency_count_right > ALLOWABLE_INCONSISTENCY_COUNT) {
-                if (i == CUBIC_RLS_WINDOW - 2) right_truncated = true;  // If we hit the end of the window
-                break;
-            }
-        }
-
-        // Check for truncation with at least 3 consistent trends
-        if (i == CUBIC_RLS_WINDOW - 2 && right_trend_count >= 3) {
-            right_truncated = true;
-            break;
-        }
-    }
-
-    printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
-
-    // If verification was truncated on the left side after at least 3 consistent trends, extend buffer to the left
-    if (left_truncated && left_trend_count >= 3) {
-        printf("Left truncation detected, extending buffer with new values to the left...\n");
-        extend_buffer_for_peak_verification(values, LEFT_SIDE, 10);  // Add 10 values to the left for verification
-        return verify_cubic_peak(values, length, second_order_gradients, peak_index, start_index, forgetting_factor);  // Re-run verification
-    }
-
-    // If verification was truncated on the right side after at least 3 consistent trends, extend buffer to the right
-    if (right_truncated && right_trend_count >= 3) {
-        printf("Right truncation detected, extending buffer with new values to the right...\n");
-        extend_buffer_for_peak_verification(values, RIGHT_SIDE, 10);  // Add 10 values to the right for verification
-        return verify_cubic_peak(values, length, second_order_gradients, peak_index, start_index, forgetting_factor);  // Re-run verification
-    }
-
-    // Verify if the peak meets the criteria
-    return left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT && right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT;
-}
-
-/**
- * @brief Finds and verifies a peak in the data using cubic RLS.
- *
- * This function first detects a peak using the `find_cubic_peak` function, and then verifies the peak
- * using the `verify_cubic_peak` function. The peak is considered valid only if it meets the trend
- * criteria on both sides of the peak.
- *
- * @param values Array of double values representing the data.
- * @param length Length of the data array.
- * @param start_index The start index in the data array from which to begin the gradient calculation.
- * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return CubicPeakAnalysisResult Structure containing the peak detection status and the peak index if found and verified.
- */
-CubicPeakAnalysisResult find_and_verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
-    CubicPeakAnalysisResult result = { .peak_found = false, .peak_index = 0 };
-    
-    // Declare the second_order_gradients array
-    double second_order_gradients[CUBIC_RLS_WINDOW];
-    
-    // Compute the second-order gradients
-    compute_cubic_second_order_gradients(second_order_gradients, values, length, start_index, forgetting_factor);
-
-    // Find and verify the peak based on the computed gradients
-    for (uint16_t i = 1; i < CUBIC_RLS_WINDOW; ++i) {
-        if (second_order_gradients[i - 1] > 0 && second_order_gradients[i] < 0) {
-            // Temporarily set the peak index
-            result.peak_index = start_index + i;
-
-            // Verify the detected peak
-            if (verify_cubic_peak(values, length, second_order_gradients, i, start_index, forgetting_factor)) {
-                result.peak_found = true;
-                printf("Verified peak found at index %u\n", result.peak_index);
-                break; // Exit the loop once a verified peak is found
-            } else {
-                printf("Peak at index %u did not pass verification. Continuing search...\n", result.peak_index);
-                result.peak_found = false; // Reset peak_found as the peak failed verification
-            }
-        }
-    }
-
-    if (!result.peak_found) {
-        printf("No verified peak found in the specified window.\n");
-    }
-
-    return result;
-}
-
 /**
  * @brief Computes the first-order gradients (slopes) for a given window size starting from a specified index.
  *
@@ -762,7 +581,7 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawData
     }
 
     // Debugging: Print a message before finding consistent increase
-    printf("Finding consistent increase...\n");
+    //printf("Finding consistent increase...\n");
 
     // Find the consistent increase trend
     trend_result.increase_info = find_consistent_increase(first_order_gradients, start_index, window_size);
@@ -776,7 +595,7 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawData
     }
 
     // Debugging: Print a message before finding consistent decrease
-    printf("Finding consistent decrease...\n");
+    //printf("Finding consistent decrease...\n");
 
     // Find the consistent decrease trend
     trend_result.decrease_info = find_consistent_decrease(first_order_gradients, start_index, window_size);
