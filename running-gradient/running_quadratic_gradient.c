@@ -8,8 +8,6 @@
 #include "running_quadratic_gradient.h"
 #include "rls_analysis_parameters.h"
 
-// #define DEBUG_GRADIENT_CALC
-
 /**
  * @brief Structure to store running gradient data for a quadratic model.
  *
@@ -27,7 +25,7 @@ typedef struct {
     double forgetting_factor; /**< Forgetting factor for the RLS algorithm */
 } RunningQuadraticGradient;
 
-/**
+/**con
  * @brief Initializes the RunningQuadraticGradient structure.
  *
  * This function sets the initial values for the coefficients, residual sum of squares,
@@ -59,13 +57,56 @@ void init_running_quadratic_gradient(RunningQuadraticGradient *rg, double forget
 }
 
 /**
- * @brief Adds a new data point to the RunningQuadraticGradient structure and updates the quadratic regression model using Recursive Least Squares (RLS).
+ * @brief Adds a new phase angle data point to the quadratic regression model and updates it using Recursive Least Squares (RLS).
  *
- * This function adds a new data point to the RunningQuadraticGradient structure, which maintains a quadratic model of the data points
- * using the Recursive Least Squares (RLS) algorithm to update the regression coefficients.
+ * This function incorporates a new phase angle measurement into an ongoing quadratic regression model.
+ * It utilizes the Recursive Least Squares (RLS) algorithm to efficiently update the model coefficients
+ * without the need to reprocess all previous data points. By fitting a second-order polynomial (quadratic function)
+ * to the noisy and scattered phase angle data collected from an impedance analyzer, the function helps in
+ * smoothing out noise and small variances, allowing for accurate peak detection in the data.
  *
- * @param rg Pointer to the RunningQuadraticGradient structure.
- * @param y The new data point to be added.
+ * ### Purpose:
+ * - **Noise Reduction**: The quadratic fit helps to smooth out the noisy phase angle data, mitigating the impact of measurement noise.
+ * - **Peak Detection**: A second-order polynomial is suitable for modeling data with a single peak or trough, enabling peak point detection.
+ *
+ * ### Recursive Least Squares (RLS) Algorithm:
+ * - The RLS algorithm is an adaptive filter that recursively finds the coefficients that minimize a weighted linear least squares cost function.
+ * - It is particularly efficient for real-time applications where data points arrive sequentially, as it updates the model incrementally.
+ * - The algorithm adjusts the model coefficients to best fit the new data point while considering previous data, with an emphasis determined by the forgetting factor.
+ *
+ * ### Function Workflow:
+ * 1. **Data Window Management**:
+ *    - Maintains a fixed-size window (`rg->max_points`) of the most recent data points.
+ *    - If the window is not full, the new data point is simply added.
+ *    - If the window is full, the oldest data point is removed (data points are shifted left), and the new data point is added at the end.
+ * 2. **Input Vector Preparation**:
+ *    - Constructs the input vector for the quadratic model: `[x^2, x, 1]`.
+ *    - Here, `x` is the time or index of the data point, and `1` corresponds to the intercept term.
+ * 3. **Inverse Covariance Matrix Update**:
+ *    - Utilizes the Sherman-Morrison formula to update the inverse covariance matrix efficiently.
+ *    - This step is crucial for the RLS algorithm to update the model coefficients without recomputing the entire covariance matrix.
+ * 4. **Model Coefficients Update**:
+ *    - Calculates the prediction error: the difference between the actual data point and the predicted value from the current model.
+ *    - Updates the model coefficients (`rg->coefficients`) using the inverse covariance matrix and the prediction error.
+ * 5. **Residual Sum of Squares Calculation**:
+ *    - Recalculates the residual sum of squares (RSS) to assess the fit of the model to the data.
+ *    - The RSS is used to measure the discrepancy between the data and the estimation model.
+ *
+ * @param rg Pointer to the `RunningQuadraticGradient` structure that holds the model state.
+ * @param data_point Pointer to the new `MqsRawDataPoint_t` containing the phase angle to be added.
+ *
+ * @note
+ * - **Numerical Stability**: The function includes a check for numerical stability to prevent division by values close to zero.
+ * - **Symmetry Enforcement**: The inverse covariance matrix is enforced to remain symmetric after updates.
+ * - **Forgetting Factor**: The `rg->forgetting_factor` parameter determines how quickly the influence of older data points diminishes.
+ *
+ * ### References:
+ * - Haykin, S. (2002). *Adaptive Filter Theory*. Prentice Hall.
+ * - The Sherman-Morrison formula: An efficient way to update the inverse of a matrix when it is modified slightly.
+ *
+ * @see init_running_quadratic_gradient
+ * @see calculate_slope_at_point
+ * @see calculate_second_order_gradient
  */
 void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDataPoint_t *data_point) {
     double y = data_point->phaseAngle; // Extract the phase angle from the data point
@@ -207,20 +248,32 @@ double calculate_second_order_gradient(const RunningQuadraticGradient *rg) {
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
  * @return bool True if the peak is verified based on the trend analysis, false otherwise.
  */
-bool verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, const double *second_order_gradients, uint16_t peak_index, uint16_t start_index, double forgetting_factor) {
+bool verify_quadratic_peak(
+    const MqsRawDataPoint_t *values,
+    uint16_t length,
+    const double *second_order_gradients,
+    uint16_t peak_index,
+    uint16_t start_index,
+    double forgetting_factor
+) {
     uint16_t left_trend_count = 0;
     uint16_t right_trend_count = 0;
     uint16_t inconsistency_count_left = 0;
     uint16_t inconsistency_count_right = 0;
 
+    // For debugging: Output global parameters
+    //printf("Debugging verify_quadratic_peak:\n");
+    //printf("minimum_required_trend_count: %d\n", quadratic_analysis_params.minimum_required_trend_count);
+    //printf("allowable_inconsistency_count: %d\n", quadratic_analysis_params.allowable_inconsistency_count);
+
     // Count increasing trends on the left side of the peak
     for (int i = peak_index; i > 0; --i) {
         if (second_order_gradients[i - 1] > 0) {
             left_trend_count++;
-            if (left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
+            if (left_trend_count >= quadratic_analysis_params.minimum_required_trend_count) break;
         } else {
             inconsistency_count_left++;
-            if (inconsistency_count_left > ALLOWABLE_INCONSISTENCY_COUNT) {
+            if (inconsistency_count_left > quadratic_analysis_params.allowable_inconsistency_count) {
                 break;
             }
         }
@@ -230,10 +283,10 @@ bool verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, con
     for (uint16_t i = peak_index; i < RLS_WINDOW - 1; ++i) {
         if (second_order_gradients[i + 1] < 0) {
             right_trend_count++;
-            if (right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT) break;
+            if (right_trend_count >= quadratic_analysis_params.minimum_required_trend_count) break;
         } else {
             inconsistency_count_right++;
-            if (inconsistency_count_right > ALLOWABLE_INCONSISTENCY_COUNT) {
+            if (inconsistency_count_right > quadratic_analysis_params.allowable_inconsistency_count) {
                 break;
             }
         }
@@ -242,7 +295,12 @@ bool verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, con
     printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
 
     // Verify if the peak meets the criteria
-    return left_trend_count >= MINIMUM_REQUIRED_TREND_COUNT && right_trend_count >= MINIMUM_REQUIRED_TREND_COUNT;
+    bool peak_verified = left_trend_count >= quadratic_analysis_params.minimum_required_trend_count &&
+                         right_trend_count >= quadratic_analysis_params.minimum_required_trend_count;
+
+    //printf("Peak verification result: %s\n", peak_verified ? "True" : "False");
+
+    return peak_verified;
 }
 
 /**
@@ -308,7 +366,7 @@ QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint
 }
 
 /**
- * @brief Computes the second-order gradients for the next 30 values in the given array.
+ * @brief Computes the second-order gradients for the next 30 values(WINDOW_SIZE) in the given array.
  *
  * This function takes an array of doubles and a starting index, and then adds each of the next 30 values
  * to the RunningQuadraticGradient structure. After each addition, it computes the second-order gradient
@@ -390,14 +448,14 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
     size_t best_start_index = 0;  // Track the start index for the best trend
     size_t best_end_index = 0;    // Track the end index for the best trend
 
-    #ifdef DEBUG
+    #ifdef DEBUG_QUADRATIC
     printf("Starting find_consistent_increase_in_second_order with start_index: %zu, window_size: %zu\n", start_index, window_size);
     #endif
 
     for (size_t i = 0; i < window_size; ++i) {
         double gradient = gradients[i];
 
-        #ifdef DEBUG
+        #ifdef DEBUG_QUADRATIC
         printf("Index: %zu, Gradient: %.6f\n", start_index + i, gradient);
         #endif
 
@@ -408,7 +466,7 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
                 tracking_increase = true;
                 cumulative_sum = 0.0;  // Reset cumulative sum when starting to track
 
-                #ifdef DEBUG
+                #ifdef DEBUG_QUADRATIC
                 printf("Started tracking increase at index %zu\n", start_index + i);
                 #endif
             }
@@ -423,20 +481,20 @@ GradientTrendIndices find_consistent_increase_in_second_order(double *gradients,
                 best_end_index = increase_info.end_index;
             }
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Continuing tracking increase: Updated end_index to %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
             #endif
         } else if (gradient < 0) {  // If the current gradient is negative
             decrease_count++;
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Negative gradient found, Decrease Count: %d\n", decrease_count);
             #endif
-
+                  
             if (decrease_count > quadratic_analysis_params.max_second_order_trend_decrease_count) {  // Use global parameter
                 tracking_increase = false;  // Stop tracking but do not discard the tracked increase
 
-                #ifdef DEBUG
+                #ifdef DEBUG_QUADRATIC
                 printf("Stopped tracking increase due to consecutive decreases at index %zu\n", start_index + i);
                 #endif
 
@@ -480,14 +538,14 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
     double cumulative_sum = 0.0;
     int increase_count = 0;
 
-    #ifdef DEBUG
+    #ifdef DEBUG_QUADRATIC
     printf("Starting find_consistent_increase_in_second_order with start_index: %u, window_size: %u\n", start_index, window_size);
     #endif
 
     for (size_t i = 0; i < window_size; ++i) {
         double gradient = gradients[i];
 
-        #ifdef DEBUG
+        #ifdef DEBUG_QUADRATIC
         printf("Index: %zu, Gradient: %.6f\n", start_index + i, gradient);
         #endif
 
@@ -498,7 +556,7 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
                 tracking_decrease = true;
                 cumulative_sum = 0.0;  // Reset cumulative sum when starting to track
 
-                #ifdef DEBUG
+                #ifdef DEBUG_QUADRATIC
                 printf("Started tracking decrease at index %zu\n", start_index + i);
                 #endif
             }
@@ -506,20 +564,20 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
             cumulative_sum += gradient;
             increase_count = 0;  // Reset increase counter on negative gradient
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Continuing tracking decrease: Updated end_index to %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
             #endif
         } else if (gradient > 0) {  // If the current gradient is positive
             increase_count++;
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Positive gradient found, Increase Count: %d\n", increase_count);
             #endif
 
             if (increase_count > quadratic_analysis_params.max_second_order_trend_increase_count) {  // Use global parameter
                 tracking_decrease = false;  // Stop tracking
 
-                #ifdef DEBUG
+                #ifdef DEBUG_QUADRATIC
                 printf("Stopped tracking decrease due to consecutive increases at index %zu\n", start_index + i);
                 #endif
                 increase_count = 0;
@@ -536,7 +594,7 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
             decrease_info.end_index = start_index + i;
             increase_count = 0;  // Reset the increase counter
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Restarted tracking decrease at index %zu, Cumulative Sum: %.6f\n", start_index + i, cumulative_sum);
             #endif
         }
@@ -579,7 +637,7 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
 GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     GradientTrendResult trend_result = {0};  // Initialize the struct with default values
     
-    printf("track_gradient_trends_with_quadratic_regression called with arguments:\n");
+    printf("-- -track_gradient_trends_with_quadratic_regression called with arguments:\n");
     //printf("  length: %u\n", length);
     //printf("  start_index: %u\n", start_index);
     //printf("  window_size: %u\n", window_size);
@@ -587,7 +645,7 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
 
     // Ensure that the start index and the window size allow for calculations
     if (start_index + window_size > length) {
-        #ifdef DEBUG
+        #ifdef DEBUG_QUADRATIC
         printf("Insufficient data to compute gradients for the specified window size.\n");
         #endif
         return trend_result;
@@ -617,20 +675,20 @@ GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRaw
         } else {
             second_order_gradients[i] = NAN;  // Not enough points yet to calculate the gradient
 
-            #ifdef DEBUG
+            #ifdef DEBUG_QUADRATIC
             printf("Not enough data points to calculate the gradient at index %u\n", current_index);
             #endif
         }
     }
 
     // Find the consistent increase trend
-    #ifdef DEBUG
+    #ifdef DEBUG_QUADRATIC
     printf("Finding consistent increase...\n");
     #endif
     trend_result.increase_info = find_consistent_increase_in_second_order(second_order_gradients, start_index, window_size);
 
     // Find the consistent decrease trend
-    #ifdef DEBUG
+    #ifdef DEBUG_QUADRATIC
     printf("Finding consistent decrease...\n");
     #endif
     trend_result.decrease_info = find_consistent_decrease_in_second_order(second_order_gradients, start_index, window_size);

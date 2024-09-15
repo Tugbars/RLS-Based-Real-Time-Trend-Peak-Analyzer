@@ -5,9 +5,6 @@
 #include "running_quadratic_gradient.h"
 #include "mqs_def.h" // Assuming this is where MqsRawDataPoint_t is defined
 
-   // Define the buffer size for the sliding window analysis
-   #define BUFFER_SIZE 200
-
 // Struct to hold the result of segment analysis, including concavity analysis
 typedef struct {
     bool isPotentialPeak;
@@ -26,37 +23,6 @@ typedef struct {
     bool on_the_peak;   // Flag indicating the trend is exactly on the peak
 } TrendDirectionFlags;
 
-// Buffer manager struct to handle sliding window analysis
-typedef struct {
-    int16_t current_phase_index;  // Tracks current index in the phaseAngles array
-    int16_t current_buffer_index; // Tracks where we are in the MqsRawDataPoint_t buffer
-    uint16_t buffer_size;         // Size of the buffer
-    uint16_t window_size;         // Size of the sliding window (e.g., 30)
-    MqsRawDataPoint_t* buffer;    // Pointer to the buffer
-    int16_t mapping_start_index;  // Tracker variable for mapping start index
-    int16_t mapping_end_index;    // Tracker variable for mapping end index
-    double start_frequency;       // Starting frequency of the sweep (e.g., 11300 Hz)
-    double frequency_increment;   // Frequency increment per step (e.g., 1 Hz)
-} BufferManager;
-
-// Extern declaration of the buffer manager for usage across different translation units
-extern BufferManager buffer_manager;
-
-// Declare the buffer with extern so that it can be accessed from other files
-extern MqsRawDataPoint_t buffer[BUFFER_SIZE];
-
-/**
- * @brief Initializes the buffer manager with the provided parameters.
- * 
- * @param buffer Pointer to the buffer that holds the data
- * @param buffer_size Size of the buffer
- * @param window_size Size of the sliding window
- * @param start_index Starting index for the buffer manager
- * @param start_frequency Starting frequency in Hz
- * @param frequency_increment Frequency increment per step in Hz
- */
-void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16_t window_size, int16_t start_index, double start_frequency, double frequency_increment);
-
 /**
  * @brief Analyzes the trend and concavity within a data segment to determine the direction of movement.
  * 
@@ -67,22 +33,6 @@ void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16
  * @return SegmentAnalysisResult Structure containing information about the detected trends and concavity pattern
  */
 SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t window_size, double forgetting_factor);
-
-/**
- * @brief Performs sliding window analysis with buffer management.
- * 
- * @param phaseAngles Pointer to the array of phase angles
- * @param phase_angle_size Size of the phase angle array
- */
-void perform_sliding_window_analysis(const double* phaseAngles, uint16_t phase_angle_size);
-
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index);
-
-void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size);
-
-void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount);
-
-void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
 
 void verify_peak_at_index(uint16_t buffer_start_index);
 

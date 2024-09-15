@@ -7,7 +7,6 @@
 #include "mqs_def.h"
 
 #define WINDOW_SIZE 30
-#define FORGETTING_FACTOR 0.5
 
 /**
  * @struct RunningGradient

@@ -8,17 +8,8 @@
 // Define the window size for the cubic RLS
 #define CUBIC_RLS_WINDOW 30
 
-/**
- * @struct CubicPeakAnalysisResult
- * @brief A structure to store the results of cubic peak analysis.
- *
- * This structure holds information about whether a peak was found during the cubic analysis and 
- * the index of that peak within the analyzed data.
- */
-typedef struct {
-    bool peak_found;       /**< Indicates if a peak was found during analysis. */
-    uint16_t peak_index;   /**< The index of the detected peak within the data array. */
-} CubicPeakAnalysisResult;
+//#define CONSISTENT_TREND_DEBUG
+//#define DEBUG_CUBIC_GRADIENT_CALC
 
 /**
  * @struct RunningCubicGradient
@@ -78,8 +69,6 @@ typedef struct {
 } PeakTrendAnalysisResult;
 
 void compute_cubic_second_order_gradients(double *second_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
-
-CubicPeakAnalysisResult find_and_verify_cubic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor);
 
 void compute_cubic_first_order_gradients(double *first_order_gradients, const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor);
 

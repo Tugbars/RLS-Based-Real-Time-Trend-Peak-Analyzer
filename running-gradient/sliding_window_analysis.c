@@ -1,31 +1,51 @@
 #include "sliding_window_analysis.h"
 #include <stdio.h>
 
+/**
+ * @file sliding_window_analysis.h
+ * @brief Header file for sliding window analysis of phase angles.
+ *
+ * This file contains function declarations and data structures used for analyzing phase angle data
+ * using sliding window techniques.
+ */
+
+
 /******************************************************************************/
 /* Global Variables */
 /******************************************************************************/
 
+/**
+ * @brief Union representing the status of the sliding window analysis process.
+ *
+ * This union contains flags that indicate the current status of the analysis,
+ * such as whether a peak is found, if the analysis is undecided, or if the peak is centered.
+ */
 typedef union {
-    uint8_t value;
+    uint8_t value; /**< The combined value of all status flags. */
     struct {
-        uint8_t isPeakFound : 1;
-        uint8_t isUndecided : 1;
-        uint8_t isCentered : 1;           // New flag
-        uint8_t isSweepRequested : 1;
-        uint8_t isSweepDone : 1;
-        uint8_t reserved : 3;             // Adjusted reserved bits
+        uint8_t isPeakFound : 1;    /**< Flag indicating if a peak is found. */
+        uint8_t isUndecided : 1;    /**< Flag indicating if the analysis is undecided. */
+        uint8_t isCentered : 1;     /**< Flag indicating if the peak is centered. */
+        uint8_t isSweepRequested : 1; /**< Flag indicating if a sweep is requested. */
+        uint8_t isSweepDone : 1;    /**< Flag indicating if the sweep is done. */
+        uint8_t reserved : 3;       /**< Reserved bits for future use. */
     };
 } SwpStatus_t;
 
+/** @brief Context for sliding window analysis. */
 SlidingWindowAnalysisContext ctx; // Sliding window analysis context
+
+/** @brief Current status of the sliding window analysis. */
 SwpStatus_t currentStatus = { .value = 0x0 };  // Initialize all flags to 0
+
+/** @brief Current state of the sliding window analysis state machine. */
 SwpState_t currentState = SWP_WAITING;  // Initialize to SWP_WAITING state
 
 /******************************************************************************/
 /* Function Prototypes (Internal Functions) */
 /******************************************************************************/
 
-// Function Declarations for OnEntry and OnExit functions
+/* OnEntry and OnExit function declarations for each state */
 static void OnEntryInitialAnalysis(void);
 static void OnEntrySegmentAnalysis(void);
 static void OnEntryUpdateBufferDirection(void);
@@ -49,13 +69,22 @@ static SwpState_t NextState(SwpState_t state);
 /******************************************************************************/
 /* State Function Definitions */
 /******************************************************************************/
+
+/**
+ * @brief Structure containing function pointers and completion status for state functions.
+ */
 typedef struct {
     void (*onEntry)(void);
     void (*onExit)(void);
     bool isComplete;
 } StateFuncs_t;
 
-// Update the STATE_FUNCS array
+/**
+ * @brief Array of state functions and their completion status.
+ *
+ * This array maps each state to its corresponding onEntry and onExit functions, along with a flag
+ * indicating whether the state's processing is complete.
+ */
 static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
     {OnEntryInitialAnalysis, OnExitInitialAnalysis, false},         // SWP_INITIAL_ANALYSIS
     {OnEntrySegmentAnalysis, OnExitSegmentAnalysis, false},         // SWP_SEGMENT_ANALYSIS
@@ -68,6 +97,14 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
 /******************************************************************************/
 /* Sliding Window Analysis Functions */
 /******************************************************************************/
+
+
+/**
+ * @brief Initializes the buffer manager for sliding window analysis.
+ *
+ * This function sets up the buffer manager with the appropriate parameters, including the buffer size,
+ * window size, starting index, and frequency parameters.
+ */
 static void initBufferManager(void) {
     // Initialize the buffer manager with appropriate parameters
     // Arguments:
@@ -85,6 +122,17 @@ static void initBufferManager(void) {
     //printf("Buffer size: %d, Window size: %d, Start index: %d\n", BUFFER_SIZE, WINDOW_SIZE, start_index);
 }
 
+
+/**
+ * @brief Starts the sliding window analysis process.
+ *
+ * This function initializes the context for the sliding window analysis, sets up the buffer manager,
+ * and starts the state machine for processing.
+ *
+ * @param phaseAngles Pointer to the array of phase angles.
+ * @param phase_angle_size Size of the phase angle array.
+ * @param callback Function pointer to the callback function to be executed after analysis.
+ */
 void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) {
     ctx.phaseAngles = phaseAngles;
     ctx.phase_angle_size = phase_angle_size;
@@ -95,7 +143,7 @@ void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_
     
     	// detect_significant_gradient_trends, determine_trend_direction
 	init_cubic_rls_analysis_parameters(                                                                                                        //CHECKS IF THERE IS A PEAK VIA COUNTING/SUMMING CONSISTENT GRADIENT INCREASES 
-        7.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     BU DA ÇOK ÖNEMLİ AMA SAYISI ARTTIRABİLİR.
+        10.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     BU DA ÇOK ÖNEMLİ AMA SAYISI ARTTIRABİLİR.
                // Trends with a sum of gradients above this threshold are considered significant.
         5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.                     BUNUN ÇOK ÖNEMLİ OLDUĞU ORTAYA ÇIKTI. BU OLMAZSA PEAKİ YARISINDA KESEBİLİR SEARCH. 
                // Ensures that only sustained trends are analyzed.
@@ -107,15 +155,18 @@ void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_
                // Helps to filter out noise when identifying a cubic trend.
     );
     
-    // Initialize the quadratic RLS analysis parameters with the necessary thresholds.                                                          CHECKS IF THERE IS ENOUGH CONCAVITY INCREASE TO SEE IF WE REALLY CAPTURED THE WHOLE PEAK. 
-    // INCREASELERIN BŞALADIKLARI YERDEN YAP BUNU?!
+    // Initialize the quadratic RLS analysis parameters with the necessary thresholds.                                                          
     init_quadratic_rls_analysis_parameters(
-        0.3,   // min_gradient_sum: Minimum cumulative sum of second-order gradients required for a trend to be considered valid.               //KULLANILMIYOR.HARDCODED 2.5 VALUE YERINE BUNU YAZABILIRIZ. SAYIYA DÖNÜŞTÜRÜLMESİ LAZIM. COUNT IT. (already doing, jut reflect it to checks)
-               // Helps in identifying significant concave or convex regions.
-        2,     // max_decrease_count: Maximum number of consecutive negative gradients allowed when tracking an increasing trend.               //SAYI SAYACAĞIMIZ İÇİN LAZIM. SIGNIFICANT INCREASE İÇİN. 
-               // Allows for minor fluctuations without discarding a potentially valid trend.
-        2      // max_increase_count: Maximum number of consecutive positive gradients allowed when tracking a decreasing trend.                //NEGATİF DURUMLARDA DA SAYI SAYACAĞIMIZ İÇİN LAZIM. SIGNIFICANT DECREASE ICIN. 
-               // Helps to filter out noise when identifying a decreasing trend.
+        1.0,  // centered_gradient_sum: If the total second-order gradient sum is less than or equal to this value,
+              // the peak is considered centered based on the gradient analysis.
+        2,    // max_decrease_count: Maximum number of consecutive negative gradients allowed
+              // when tracking an increasing trend. Allows for minor fluctuations without discarding a valid trend.
+        2,    // max_increase_count: Maximum number of consecutive positive gradients allowed
+              // when tracking a decreasing trend. Helps to filter out noise when identifying a decreasing trend.
+        5,    // min_trend_count: Minimum number of consistent trends required to consider a peak valid.
+              // Ensures that only sustained trends are analyzed.
+        2     // allowable_inconsistency_count: Allowable number of inconsistencies in trend detection.
+              // Permits minor deviations without discarding the trend.
     );
     
     // Initialize the on-peak analysis parameters for average gradient thresholds and consistent trend count
@@ -148,15 +199,21 @@ void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_
 /******************************************************************************/
 /* State Machine Entry Functions */
 /******************************************************************************/
+
+/**
+ * @brief Entry function for the SWP_INITIAL_ANALYSIS state.
+ *
+ * This function loads the initial buffer with phase angle data and sets the sweep request flag.
+ */
 static void OnEntryInitialAnalysis(void) {
     //printf("→→→→→Entering SWP_INITIAL_ANALYSIS state.\n");
 
     load_initial_buffer(ctx.phaseAngles, ctx.phase_angle_size);
     
       // Debugging buffer state after load
-    printf("[DEBUG] Buffer Manager State after initial loading:\n");
-    printf("Current buffer index: %d\n", buffer_manager.current_buffer_index);
-    printf("Current phase index: %d\n", buffer_manager.current_phase_index);
+    //printf("[DEBUG] Buffer Manager State after initial loading:\n");
+    //printf("Current buffer index: %d\n", buffer_manager.current_buffer_index);
+    //printf("Current phase index: %d\n", buffer_manager.current_phase_index);
     //printf("Window size: %d\n", buffer_manager.window_size);
     //printf("Buffer size: %d\n", buffer_manager.buffer_size);
     currentStatus.isSweepRequested = true;
@@ -164,8 +221,14 @@ static void OnEntryInitialAnalysis(void) {
     SwpProcessStateChange();  // Move to next state
 }
 
+
+/**
+ * @brief Entry function for the SWP_SEGMENT_ANALYSIS state.
+ *
+ * This function performs segment analysis on the current window of data to determine the direction of movement.
+ */
 static void OnEntrySegmentAnalysis(void) {
-    printf("→→→→→Entering SWP_SEGMENT_ANALYSIS state.\n");
+    //printf("→→→→→Entering SWP_SEGMENT_ANALYSIS state.\n");
     
     float forgetting_factor = 0.5f;
 
@@ -187,6 +250,11 @@ static void OnEntrySegmentAnalysis(void) {
     SwpProcessStateChange();
 }
 
+/**
+ * @brief Entry function for the SWP_UPDATE_BUFFER_DIRECTION state.
+ *
+ * This function updates the buffer based on the determined direction from the segment analysis.
+ */
 static void OnEntryUpdateBufferDirection(void) {
     // Pass the movement amount as an argument
     update_buffer_for_direction(ctx.phaseAngles, ctx.direction, buffer_manager.window_size / 2);
@@ -195,6 +263,11 @@ static void OnEntryUpdateBufferDirection(void) {
     SwpProcessStateChange();  // Move to next state
 }
 
+/**
+ * @brief Entry function for the SWP_UNDECIDED_TREND_CASE state.
+ *
+ * This function handles the case when the segment analysis result is undecided by moving the window forward.
+ */
 static void OnEntryUndecidedTrendCase(void) {  //ÜZERİNE YAZIYOR.
     //printf("→→→→→→Entering SWP_UNDECIDED_TREND_CASE state.\n");
 
@@ -204,9 +277,12 @@ static void OnEntryUndecidedTrendCase(void) {  //ÜZERİNE YAZIYOR.
     SwpProcessStateChange();
 }
 
+/**
+ * @brief Entry function for the SWP_PEAK_CENTERING state.
+ *
+ * This function centers the peak within the window by adjusting the buffer based on gradient analysis.
+ */
 static void OnEntryPeakCentering(void) {
-    printf("→→→→→Entering SWP_PEAK_CENTERING state.\n");
-
     // Reset the isComplete flag
     STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = false;
 
@@ -214,8 +290,6 @@ static void OnEntryPeakCentering(void) {
     uint16_t start_index = buffer_manager.current_buffer_index;
     uint16_t window_size = buffer_manager.window_size;
 
-
-    //    double total_gradient_sum = compute_total_second_order_gradient(test_buffer, size, start_index, 0.5);
     // Compute the total sum of second-order gradients using the buffer directly
     double total_gradient_sum = compute_total_second_order_gradient(
         buffer_manager.buffer,
@@ -226,82 +300,87 @@ static void OnEntryPeakCentering(void) {
 
     printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
 
-    // If total_gradient_sum <= 2.0, consider the peak centered
-    if (total_gradient_sum <= 1.0) {
+    // If total_gradient_sum <= centered_gradient_sum, consider the peak centered
+    if (total_gradient_sum <= quadratic_analysis_params.centered_gradient_sum) {
         currentStatus.isCentered = 1;
         printf("Peak is centered based on total_gradient_sum.\n");
         STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
-    }
 
-    // Else, we need to adjust the buffer to center the peak
-    // Use track_gradient_trends_with_quadratic_regression to get trend info
-    GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
-        buffer_manager.buffer,
-        buffer_manager.buffer_size,
-        start_index,
-        window_size,
-        0.5 // Forgetting factor
-    );
-
-    // Check if both trends are valid
-    if (!gradient_trends.increase_info.valid || !gradient_trends.decrease_info.valid) {
-        printf("Invalid trend data. Cannot proceed with centering.\n");
-        currentStatus.isCentered = 1; // Consider it centered for now
-        STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
-    }
-
-    // Calculate durations of increase and decrease trends
-    uint16_t increase_start = gradient_trends.increase_info.start_index;
-    uint16_t increase_end = gradient_trends.increase_info.end_index;
-    uint16_t decrease_start = gradient_trends.decrease_info.start_index;
-    uint16_t decrease_end = gradient_trends.decrease_info.end_index;
-
-    // Adjust indices relative to the buffer
-    uint16_t increase_duration = (increase_end + buffer_manager.buffer_size - increase_start) % buffer_manager.buffer_size;
-    uint16_t decrease_duration = (decrease_end + buffer_manager.buffer_size - decrease_start) % buffer_manager.buffer_size;
-
-    int shift_amount = 0;
-    int direction = UNDECIDED; // LEFT_SIDE or RIGHT_SIDE
-
-    if (increase_duration > decrease_duration) {
-        // Peak is to the left; we need to move right
-        shift_amount = (increase_duration - decrease_duration);
-        direction = RIGHT_SIDE;
-        printf("Increase duration (%u) > decrease duration (%u). Moving right by %d.\n",
-               increase_duration, decrease_duration, shift_amount);
-               
-               currentStatus.isCentered = 1;
-    } else if (decrease_duration > increase_duration) {
-        // Peak is to the right; we need to move left
-        shift_amount = (decrease_duration - increase_duration);
-        direction = LEFT_SIDE;
-        printf("Decrease duration (%u) > increase duration (%u). Moving left by %d.\n",
-               decrease_duration, increase_duration, shift_amount);
-               
-               currentStatus.isCentered = 1;
+        // No need to adjust the buffer; the state machine will handle the transition
     } else {
-        // Durations are equal; consider the peak centered
-        currentStatus.isCentered = 1;
-        printf("Increase and decrease durations are equal. Peak is centered.\n");
-        STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
-        
-        currentStatus.isCentered = 1;
+        // Else, we need to adjust the buffer to center the peak
+        // Use track_gradient_trends_with_quadratic_regression to get trend info
+        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
+            buffer_manager.buffer,
+            buffer_manager.buffer_size,
+            start_index,
+            window_size,
+            0.5 // Forgetting factor
+        );
+
+        // Check if both trends are valid
+        if (!gradient_trends.increase_info.valid || !gradient_trends.decrease_info.valid) {
+            printf("Invalid trend data. Cannot proceed with centering.\n");
+            currentStatus.isCentered = 1; // Consider it centered for now
+            STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+        } else {
+            // Calculate durations of increase and decrease trends
+            uint16_t increase_start = gradient_trends.increase_info.start_index;
+            uint16_t increase_end = gradient_trends.increase_info.end_index;
+            uint16_t decrease_start = gradient_trends.decrease_info.start_index;
+            uint16_t decrease_end = gradient_trends.decrease_info.end_index;
+
+            // Adjust indices relative to the buffer
+            uint16_t increase_duration = (increase_end + buffer_manager.buffer_size - increase_start) % buffer_manager.buffer_size;
+            uint16_t decrease_duration = (decrease_end + buffer_manager.buffer_size - decrease_start) % buffer_manager.buffer_size;
+
+            int shift_amount = 0;
+            int direction = UNDECIDED; // LEFT_SIDE or RIGHT_SIDE
+
+            if (increase_duration > decrease_duration) {
+                // Peak is to the left; we need to move right
+                shift_amount = (increase_duration - decrease_duration);
+                direction = RIGHT_SIDE;
+                printf("Increase duration (%u) > decrease duration (%u). Moving right by %d.\n",
+                       increase_duration, decrease_duration, shift_amount);
+            } else if (decrease_duration > increase_duration) {
+                // Peak is to the right; we need to move left
+                shift_amount = (decrease_duration - increase_duration);
+                direction = LEFT_SIDE;
+                printf("Decrease duration (%u) > increase duration (%u). Moving left by %d.\n",
+                       decrease_duration, increase_duration, shift_amount);
+            } else {
+                // Durations are equal; consider the peak centered
+                currentStatus.isCentered = 1;
+                printf("Increase and decrease durations are equal. Peak is centered.\n");
+                STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+            }
+
+            if (shift_amount == 0) {
+                // No need to shift
+                currentStatus.isCentered = 1;
+                printf("No shift needed. Peak is centered.\n");
+                STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+            } else {
+                // Adjust the buffer
+                update_buffer_for_direction(ctx.phaseAngles, direction, shift_amount);
+
+                // The state machine will re-enter this state to check again
+            }
+        }
     }
 
-    if (shift_amount == 0) {
-        // No need to shift
-        currentStatus.isCentered = 1;
-        printf("No shift needed. Peak is centered.\n");
-        STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+    // The state machine will handle the transition based on the isComplete flag
+    if (STATE_FUNCS[SWP_PEAK_CENTERING].isComplete) {
+        SwpProcessStateChange();
     }
-
-    // Adjust the buffer
-    update_buffer_for_direction(ctx.phaseAngles, direction, shift_amount);
-    
-    // Do not set isComplete to true; the state machine will re-enter this state
-    SwpProcessStateChange();
 }
 
+/**
+ * @brief Entry function for the SWP_PEAK_FINDING_ANALYSIS state.
+ *
+ * This function verifies the peak at the current buffer index.
+ */
 static void OnEntryPeakFindingAnalysis(void) {
     //printf("----→Entering SWP_PEAK_FINDING_ANALYSIS state.\n");
 
@@ -312,6 +391,11 @@ static void OnEntryPeakFindingAnalysis(void) {
     SwpProcessStateChange();
 }
 
+/**
+ * @brief Entry function for the SWP_WAITING state.
+ *
+ * This function waits for a sweep request and executes the callback if provided.
+ */
 static void OnEntryWaiting(void) {
     //printf("→→→→→Entering SWP_WAITING state.\n");
 
@@ -354,6 +438,13 @@ static void OnExitPeakCentering(void) {
 /******************************************************************************/
 /* State Machine Process and Transitions */
 /******************************************************************************/
+
+/**
+ * @brief Processes state changes in the sliding window analysis state machine.
+ *
+ * This function manages transitions between states based on the current status flags and ensures that
+ * the appropriate onEntry and onExit functions are called for each state.
+ */
 void SwpProcessStateChange(void) {
     bool stateChanged;
     
@@ -405,6 +496,12 @@ void SwpProcessStateChange(void) {
 /* Helper Functions for State Transitioning */
 /******************************************************************************/
 
+/**
+ * @brief Determines the next state in the state machine based on the current state and status flags.
+ *
+ * @param state The current state.
+ * @return SwpState_t The next state to transition to.
+ */
 static SwpState_t NextState(SwpState_t state) {
     switch (state) {
         case SWP_INITIAL_ANALYSIS:
@@ -454,3 +551,5 @@ static SwpState_t NextState(SwpState_t state) {
             return SWP_WAITING;
     }
 }
+
+

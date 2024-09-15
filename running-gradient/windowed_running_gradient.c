@@ -15,7 +15,7 @@
  *
  * @param rg Pointer to the RunningGradient structure.
  */
-void init_running_gradient(RunningGradient *rg) {
+void init_running_gradient(RunningGradient *rg, double forgetting_factor) {
     rg->num_points = 0;
     rg->max_points = WINDOW_SIZE;
     rg->coefficients[0] = 0;
@@ -25,7 +25,7 @@ void init_running_gradient(RunningGradient *rg) {
     rg->inverse_cov_matrix[0][1] = 0;
     rg->inverse_cov_matrix[1][0] = 0;
     rg->inverse_cov_matrix[1][1] = 1e9;
-    rg->forgetting_factor = FORGETTING_FACTOR;
+    rg->forgetting_factor = forgetting_factor;
 
     for (uint16_t i = 0; i < WINDOW_SIZE; ++i) {
         rg->x[i] = (double)i; // Pre-fill x values for the window
@@ -94,22 +94,63 @@ static inline double quickselect(double* arr, uint16_t left, uint16_t right, uin
 }
 
 /**
- * @brief Adds a new data point to the RunningGradient structure and updates the regression coefficients.
+ * @brief Adds a new phase angle data point to the linear regression model and updates it using Recursive Least Squares (RLS).
  *
- * This function updates the regression coefficients using a numerically stable Recursive Least Squares (RLS) algorithm.
- * It maintains a window of recent data points and adjusts the coefficients incrementally as new data points are added.
- * The inverse covariance matrix is updated to ensure efficient and stable coefficient updates.
+ * This function incorporates a new phase angle measurement into an ongoing linear regression model.
+ * It utilizes the Recursive Least Squares (RLS) algorithm to efficiently update the model coefficients
+ * without the need to reprocess all previous data points. By fitting a first-order polynomial (linear function)
+ * to the incoming data, the function allows for real-time detection of increasing or decreasing trends
+ * in the phase angle data collected from an impedance analyzer.
  *
- * The Recursive Least Squares (RLS) algorithm updates the coefficients of the linear regression model by incorporating
- * new data points one at a time. It is a form of adaptive filter that adjusts the model parameters to minimize the 
- * prediction error. The inverse covariance matrix is used to _probabili the adjustment to the coefficients.
+ * ### Purpose:
+ * - **Trend Detection**: The linear fit helps to identify whether the data is trending upwards (increasing) or downwards (decreasing).
+ * - **Real-Time Analysis**: The use of RLS enables the model to be updated dynamically as new data arrives, making it suitable for real-time applications.
  *
- * RLS is particularly suitable for running gradient calculations because it efficiently updates the model parameters
- * without the need to reprocess all previous data points. This is essential for real-time applications where data is
- * continuously arriving, and the gradient needs to be updated dynamically.
+ * ### Recursive Least Squares (RLS) Algorithm:
+ * - RLS is an adaptive filter algorithm that recursively finds the coefficients that minimize a weighted linear least squares cost function.
+ * - It is efficient for applications where data points arrive sequentially, as it updates the model incrementally.
+ * - The algorithm adjusts the model coefficients to best fit the new data point while considering previous data, with an emphasis determined by the forgetting factor.
  *
- * @param rg Pointer to the RunningGradient structure.
- * @param y The new data point value.
+ * ### Function Workflow:
+ * 1. **Data Window Management**:
+ *    - Maintains a fixed-size window (`rg->max_points`) of the most recent data points.
+ *    - If the window is not full, the new data point is simply added.
+ *    - If the window is full, the oldest data point is removed (data points are shifted left), and the new data point is added at the end.
+ * 2. **Input Vector Preparation**:
+ *    - Constructs the input vector for the linear model: `[x, 1]`.
+ *    - Here, `x` is the time or index of the data point, and `1` corresponds to the intercept term.
+ * 3. **Inverse Covariance Matrix Update**:
+ *    - Utilizes the Sherman-Morrison formula to update the inverse covariance matrix efficiently.
+ *    - This step is crucial for the RLS algorithm to update the model coefficients without recomputing the entire covariance matrix.
+ * 4. **Model Coefficients Update**:
+ *    - Calculates the prediction error: the difference between the actual data point and the predicted value from the current model.
+ *    - Updates the model coefficients (`rg->coefficients`) using the inverse covariance matrix and the prediction error.
+ * 5. **Residual Sum of Squares Calculation**:
+ *    - Recalculates the residual sum of squares (RSS) to assess the fit of the model to the data.
+ *    - The RSS is used to measure the discrepancy between the data and the estimation model.
+ *
+ * ### How This Helps in Trend Detection:
+ * - **Gradient Calculation**: The slope of the linear model (`rg->coefficients[0]`) represents the gradient of the data.
+ *   - A positive slope indicates an increasing trend.
+ *   - A negative slope indicates a decreasing trend.
+ * - **Dynamic Updating**: As new data points are added, the model adjusts, allowing for real-time monitoring of trend changes.
+ * - **Noise Reduction**: By fitting a line to the data, random fluctuations (noise) are smoothed out, making the underlying trend more apparent.
+ *
+ * @param rg Pointer to the `RunningGradient` structure that holds the model state.
+ * @param data_point Pointer to the new `MqsRawDataPoint_t` containing the phase angle to be added.
+ *
+ * @note
+ * - **Numerical Stability**: The function includes a check for numerical stability to prevent division by values close to zero.
+ * - **Symmetry Enforcement**: The inverse covariance matrix is enforced to remain symmetric after updates.
+ * - **Forgetting Factor**: The `rg->forgetting_factor` parameter determines how quickly the influence of older data points diminishes.
+ *
+ * ### References:
+ * - Haykin, S. (2002). *Adaptive Filter Theory*. Prentice Hall.
+ * - The Sherman-Morrison formula: An efficient way to update the inverse of a matrix when it is modified slightly.
+ *
+ * @see init_running_gradient
+ * @see calculate_gradient
+ * @see calculate_standard_error
  */
 void add_data_point(RunningGradient *const rg, const MqsRawDataPoint_t *data_point) {
     // Extract the phase angle from the data point
@@ -389,8 +430,8 @@ GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, u
     GradientComparisonResult result = {0.0, 0.0, 0, 0, 0.0, 0.0, UNDECIDED};
     
     RunningGradient rg_left_part, rg_right_part;
-    init_running_gradient(&rg_left_part);
-    init_running_gradient(&rg_right_part);
+    init_running_gradient(&rg_left_part, forgetting_factor);
+    init_running_gradient(&rg_right_part, forgetting_factor);
 
     uint16_t middle_index = start_index + WINDOW_SIZE / 2;  // Middle of the window
 

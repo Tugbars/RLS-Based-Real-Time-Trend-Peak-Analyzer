@@ -109,8 +109,7 @@ void add_cubic_data_point(RunningCubicGradient *const rg, const MqsRawDataPoint_
 
     // Check for numerical stability
     if (fabs(denom) < 1e-10) {
-        fprintf(stderr, "Numerical stability issue: denom is too close to zero.\n");
-        exit(EXIT_FAILURE);
+        printf("Numerical stability issue: denom is too close to zero.\n");
     }
 
     // Update the inverse covariance matrix using the Woodbury identity
@@ -586,27 +585,11 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawData
     // Find the consistent increase trend
     trend_result.increase_info = find_consistent_increase(first_order_gradients, start_index, window_size);
 
-    // Debugging: Print the results of the increase detection
-    if (trend_result.increase_info.valid) {
-        printf("Consistent increase found from index %u to %u with sum %.6f\n",
-               trend_result.increase_info.start_index, trend_result.increase_info.end_index, trend_result.increase_info.max_sum);
-    } else {
-        printf("No consistent increase detected.\n");
-    }
-
     // Debugging: Print a message before finding consistent decrease
     //printf("Finding consistent decrease...\n");
 
     // Find the consistent decrease trend
     trend_result.decrease_info = find_consistent_decrease(first_order_gradients, start_index, window_size);
-
-    // Debugging: Print the results of the decrease detection
-    if (trend_result.decrease_info.valid) {
-        printf("Consistent decrease found from index %u to %u with sum %.6f\n",
-               trend_result.decrease_info.start_index, trend_result.decrease_info.end_index, trend_result.decrease_info.max_sum);
-    } else {
-        printf("No consistent decrease detected.\n");
-    }
 
     return trend_result;
 }

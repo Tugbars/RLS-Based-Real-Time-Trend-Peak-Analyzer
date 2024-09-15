@@ -7,12 +7,9 @@
 #include "running_peak_analysis.h"
 #include "running_cubic_gradient.h"
 #include "rls_analysis_parameters.h"
+#include "buffer_manager.h"
 
-
-    // Prepare a buffer for analysis (using 200 data points as an example)
-    MqsRawDataPoint_t buffer[BUFFER_SIZE];
-
-/**
+/**a
  * @brief Determines the directional trend within a given window based on the analysis of peak trends.
  *
  * This function is designed to analyze trends within a specific window of data and determine the direction
@@ -69,7 +66,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         average_increase = trends->increase_info.max_sum / (double)increase_duration;
 
         //printf("Significant increase detected. Increase end index: %u\n", trends->increase_info.end_index);
-        printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
+        //printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
         if (increase_duration > peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase) {
@@ -96,7 +93,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         average_decrease = trends->decrease_info.max_sum / (double)decrease_duration;
 
         //printf("Significant decrease detected. Decrease start index: %u\n", trends->decrease_info.start_index);
-        printf("Average Decrease: %.6f over interval [%u - %u]\n", average_decrease, trends->decrease_info.start_index, trends->decrease_info.end_index);
+        //printf("Average Decrease: %.6f over interval [%u - %u]\n", average_decrease, trends->decrease_info.start_index, trends->decrease_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
         if (decrease_duration > peak_analysis_params.min_consistent_trend_count && average_decrease < peak_analysis_params.min_average_decrease) {
@@ -198,6 +195,7 @@ void log_final_direction(int nextDirection) {
  *         whether a potential or true peak was found, and the detected concavity pattern.
  */
 SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t window_size, double forgetting_factor) {
+    
     SegmentAnalysisResult result = {
         .isPotentialPeak = false,
         .isTruePeak = false,
@@ -274,185 +272,6 @@ end_analysis:
     return result;
 }
 
-BufferManager buffer_manager;
-
-/**
- * @brief Initializes the BufferManager struct with starting values.
- *
- * This function sets up the buffer manager by initializing its buffer, buffer size, window size, 
- * current phase index, and frequency parameters. The buffer index is set to the middle of the buffer.
- *
- * @param buffer A pointer to the phase data buffer to be managed.
- * @param buffer_size Size of the buffer.
- * @param window_size Size of the sliding window.
- * @param start_index Starting index for phase data analysis.
- * @param start_frequency The starting frequency for the phase index.
- * @param frequency_increment Increment value to calculate frequency for each phase index.
- *
- * @note This function prints out debugging information, including the initial state of the buffer manager.
- */
-void init_buffer_manager(MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16_t window_size, int16_t start_index, double start_frequency, double frequency_increment) {
-    buffer_manager.buffer = buffer;
-    buffer_manager.buffer_size = buffer_size;
-    buffer_manager.window_size = window_size;
-    buffer_manager.current_phase_index = start_index;
-    buffer_manager.current_buffer_index = buffer_size / 2; // Start from the middle of the buffer
-    
-    buffer_manager.mapping_start_index = start_index;
-    buffer_manager.mapping_end_index = start_index + window_size - 1;
-    
-    buffer_manager.start_frequency = start_frequency;
-    buffer_manager.frequency_increment = frequency_increment;
-
-    // Debugging: Print initialization state
-    //printf("Buffer Manager initialized:\n");
-    //printf("Buffer size: %d, Window size: %d, Start index: %d\n", buffer_size, window_size, start_index);
-    //printf("Start frequency: %.2f Hz, Frequency increment: %.2f Hz\n", start_frequency, frequency_increment);
-}
-
-
-/**
- * @brief Loads the initial window of phase angle data into the buffer.
- *
- * @param phaseAngles      Pointer to the array of phase angles.
- * @param phase_angle_size Size of the phase angle array.
- */
-void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
-    //printf("Loading initial window of data into the buffer.\n");
-    
-    for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
-        int16_t buffer_index = (buffer_manager.current_buffer_index + i) % buffer_manager.buffer_size;
-        int16_t phase_index = buffer_manager.current_phase_index + i;
-
-        // Ensure phase_index is within bounds
-        if (phase_index >= phase_angle_size) {
-            //printf("[load_initial_buffer] Phase index %d out of bounds. Setting phaseAngle to 0.0.\n", phase_index);
-            buffer_manager.buffer[buffer_index].phaseAngle = 0.0;
-        } else {
-            buffer_manager.buffer[buffer_index].phaseAngle = phaseAngles[phase_index];
-            buffer_manager.buffer[buffer_index].impedance = 0.0; // Initialize impedance as needed
-            //printf("[load_initial_buffer] Buffer[%d] set to phaseAngle %.6f\n", buffer_index, phaseAngles[phase_index]);
-        }
-    }
-
-    //printf("Initial buffer loading complete.\n");
-}
-
- 
-/**
- * @brief Updates the buffer with phaseAngle values and optionally sets impedance.
- *
- * This function maps phase index values to buffer indices and updates the buffer with the corresponding
- * phaseAngle values. It also logs the updates made to the buffer.
- *
- * @param phaseAngles A pointer to the array of phase angles.
- * @param phase_index_start The starting index of the phase angles to update from.
- * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
- */
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index) {
-    // Loop to update the buffer with new phaseAngle values
-    for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
-        int16_t phase_index = phase_index_start + i;
-        int16_t buffer_index = (buffer_start_index + i) % buffer_manager.buffer_size;
-
-        // Debugging: Log the details of buffer update before actual update
-        //printf("[update_phaseAngle_to_buffer] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n", buffer_index, phase_index, phaseAngles[phase_index]);
-
-        // Copy phaseAngle and optionally set impedance
-        buffer_manager.buffer[buffer_index].phaseAngle = phaseAngles[phase_index];
-        buffer_manager.buffer[buffer_index].impedance = 0.0; // Mock impedance, update if needed
-
-        // Debugging: Log the update in the buffer
-        //printf("[update_phaseAngle_to_buffer] Buffer updated at phase index %d with phaseAngle %.6f (buffer index: %d)\n", phase_index, phaseAngles[phase_index], buffer_index);
-    }
-}
-
-void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount) {
-    int16_t phase_index_start = buffer_manager.current_phase_index;
-    int16_t phase_index_end = phase_index_start + buffer_manager.window_size;
-    int16_t buffer_start_index = buffer_manager.current_buffer_index;
-
-    // Log initial indices before movement
-    printf("[update_buffer] Initial phase index start: %d, end: %d, buffer start index: %d\n",
-           phase_index_start, phase_index_end, buffer_start_index);
-
-    // Calculate the shift direction (LEFT or RIGHT)
-    if (direction == LEFT_SIDE) {
-        phase_index_start -= move_amount;
-        phase_index_end = phase_index_start + buffer_manager.window_size;
-        buffer_start_index -= move_amount;
-
-        // Handle circular buffer wrap-around for buffer index
-        if (buffer_start_index < 0) {
-            buffer_start_index += buffer_manager.buffer_size;
-        }
-        printf("[update_buffer] Moving left by %d. New phase index range: [%d - %d], buffer start index: %d\n",
-               move_amount, phase_index_start, phase_index_end, buffer_start_index);
-    } else if (direction == RIGHT_SIDE) {
-        phase_index_start += move_amount;
-        phase_index_end = phase_index_start + buffer_manager.window_size;
-        buffer_start_index += move_amount;
-
-        // Handle circular buffer wrap-around for buffer index
-        if (buffer_start_index >= buffer_manager.buffer_size) {
-            buffer_start_index -= buffer_manager.buffer_size;
-        }
-        printf("[update_buffer] Moving right by %d. New phase index range: [%d - %d], buffer start index: %d\n",
-               move_amount, phase_index_start, phase_index_end, buffer_start_index);
-    } else {
-        printf("[update_buffer] Direction undecided. No movement.\n");
-        return;
-    }
-
-    // Ensure phase index stays within bounds of phaseAngles
-    if (phase_index_start < 0 || buffer_start_index > buffer_manager.buffer_size) {
-        printf("[update_buffer] Out of bounds of phase angles (index: [%d - %d]). Operation aborted.\n",
-               phase_index_start, phase_index_end);
-        return;
-    }
-
-    // Update the buffer with new phase angles
-    update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index);
-
-    // Update the current phase and buffer indices
-    buffer_manager.current_phase_index = phase_index_start;
-    buffer_manager.current_buffer_index = buffer_start_index;
-
-    // Log final indices after update
-    printf("[update_buffer] Updated buffer indices. Current phase index: %d, Buffer start index: %d\n",
-           buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
-}
-
-/**
- * @brief Handles the case when the segment analysis result is undecided.
- *
- * This function jumps forward in the phaseAngle array by the window size, discards the previous analysis,
- * and reloads the buffer from the new phase index. The new portion of the phaseAngle array is loaded into the buffer,
- * overwriting the previous values in the middle section of the buffer.
- *
- * @param phaseAngles A pointer to the array of phase angles.
- * @param phase_angle_size The total size of the phase angle array.
- */
-void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size) {
-    // Flag to indicate entry into the function
-    //printf("[handle_undecided_case] Entering undecided case handler.\n");
-
-    // Jump forward by the window size in the phaseAngle array
-    buffer_manager.current_phase_index += buffer_manager.window_size;
-
-    // Ensure we don't exceed the phase angle size
-    if (buffer_manager.current_phase_index + buffer_manager.window_size > phase_angle_size) {
-        printf("[handle_undecided_case] Phase index exceeds phase angle size. Stopping analysis.\n");
-        return;
-    }
-
-    // Load new phase angle values from the phaseAngle array into the middle section of the buffer
-    printf("[handle_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
-    update_phaseAngle_to_buffer(phaseAngles, buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
-
-    // Log the buffer after loading new data
-    printf("[handle_undecided_case] Loaded new phase angle values into the buffer. Starting analysis from buffer index %d.\n", buffer_manager.current_buffer_index);
-}
 
 /**
  * @brief Verifies the detected peak using the find_and_verify_cubic_peak function.

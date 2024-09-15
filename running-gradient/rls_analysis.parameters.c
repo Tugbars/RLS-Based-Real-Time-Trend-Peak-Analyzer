@@ -1,5 +1,6 @@
 #include "rls_analysis_parameters.h"
 #include <stdint.h> // Include this to ensure uint16_t is defined
+#include <stdio.h>
 
 /**
  * @brief Global variable to store the parameters for cubic RLS analysis.
@@ -68,12 +69,18 @@ void init_cubic_rls_analysis_parameters(double significance_thresh, uint16_t dur
  * @param max_increase_count The maximum number of consecutive positive gradients allowed when tracking a decreasing trend.
  *                           This helps to filter out noise when identifying a decreasing trend.
  */
-void init_quadratic_rls_analysis_parameters(double min_gradient_sum, int max_decrease_count, int max_increase_count) {
-    quadratic_analysis_params.minimum_second_order_gradient_sum = min_gradient_sum;
+void init_quadratic_rls_analysis_parameters(
+    double centered_gradient_sum,
+    int max_decrease_count,
+    int max_increase_count,
+    int min_trend_count,
+    int allowable_inconsistency_count
+) {
+    quadratic_analysis_params.centered_gradient_sum = centered_gradient_sum;
     quadratic_analysis_params.max_second_order_trend_decrease_count = max_decrease_count;
-    printf("max_second_order_trend_decrease_count: %d\n", quadratic_analysis_params.max_second_order_trend_decrease_count);
-
     quadratic_analysis_params.max_second_order_trend_increase_count = max_increase_count;
+    quadratic_analysis_params.minimum_required_trend_count = min_trend_count;
+    quadratic_analysis_params.allowable_inconsistency_count = allowable_inconsistency_count;
 }
 
 /**
@@ -84,7 +91,6 @@ void init_on_peak_analysis_parameters(double min_avg_increase, double min_avg_de
     peak_analysis_params.min_average_decrease = min_avg_decrease;
     peak_analysis_params.min_consistent_trend_count = min_trend_count;
 }
-
 
 /**
  * @brief Initializes the parameters for gradient analysis.
