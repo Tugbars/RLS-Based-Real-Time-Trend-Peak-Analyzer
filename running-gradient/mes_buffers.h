@@ -2,7 +2,6 @@
 #define MES_BUFFERS_H
 
 #include "mqs_def.h"
-#include <stdint.h>
 
 typedef struct {
 	const MqsRawDataSweep_t* setup;

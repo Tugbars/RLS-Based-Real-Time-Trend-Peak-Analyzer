@@ -1,7 +1,6 @@
 #include "mes_buffers.h"
 #include "mqs_def.h"
 #include <string.h>
-#include <stdint.h>
 
 // Definition of buffers and related variables
 uint8_t rawBuffer[MQS_RAW_DATA_SET_SIZE_MAX];

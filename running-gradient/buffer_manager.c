@@ -17,9 +17,6 @@
 // Global variables
 BufferManager buffer_manager;
 
-/** @brief Define the buffer array used for sliding window analysis. */
-MqsRawDataPoint_t buffer[BUFFER_SIZE];
-
 /**
  * @brief Initializes the BufferManager struct with starting values.
  *

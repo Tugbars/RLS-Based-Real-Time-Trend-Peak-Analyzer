@@ -63,7 +63,8 @@ static void OnExitPeakFindingAnalysis(void);
 static void OnExitWaiting(void);
 static void OnExitPeakCentering(void);
 
-static void initBufferManager(void);
+void SwpProcessStateChange(void);
+static void initBufferManager(MqsRawDataPoint_t* dataBuffer);
 static SwpState_t NextState(SwpState_t state);
 
 /******************************************************************************/
@@ -105,7 +106,7 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
  * This function sets up the buffer manager with the appropriate parameters, including the buffer size,
  * window size, starting index, and frequency parameters.
  */
-static void initBufferManager(void) {
+static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // Initialize the buffer manager with appropriate parameters
     // Arguments:
     // buffer          -> The buffer that will store the phase and impedance values (array of MqsRawDataPoint_t)
@@ -115,11 +116,11 @@ static void initBufferManager(void) {
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
     int start_index = 220;
-    init_buffer_manager(buffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);
+    init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);
 
     // Debugging: Print initialization state
-    //printf("[DEBUG] Buffer Manager initialized:\n");
-    //printf("Buffer size: %d, Window size: %d, Start index: %d\n", BUFFER_SIZE, WINDOW_SIZE, start_index);
+    printf("[DEBUG] Buffer Manager initialized:\n");
+    printf("Buffer size: %d, Window size: %d, Start index: %d\n", BUFFER_SIZE, WINDOW_SIZE, start_index);
 }
 
 
@@ -133,19 +134,19 @@ static void initBufferManager(void) {
  * @param phase_angle_size Size of the phase angle array.
  * @param callback Function pointer to the callback function to be executed after analysis.
  */
-void startSlidingWindowAnalysis(const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) {
+void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) {
     ctx.phaseAngles = phaseAngles;
     ctx.phase_angle_size = phase_angle_size;
     ctx.callback = callback;
 
     // Initialize the buffer manager
-    initBufferManager();
+    initBufferManager(sweep->data);
     
     	// detect_significant_gradient_trends, determine_trend_direction
 	init_cubic_rls_analysis_parameters(                                                                                                        //CHECKS IF THERE IS A PEAK VIA COUNTING/SUMMING CONSISTENT GRADIENT INCREASES 
-        10.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     BU DA ÇOK ÖNEMLİ AMA SAYISI ARTTIRABİLİR.
+        10.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     
                // Trends with a sum of gradients above this threshold are considered significant.
-        5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.                     BUNUN ÇOK ÖNEMLİ OLDUĞU ORTAYA ÇIKTI. BU OLMAZSA PEAKİ YARISINDA KESEBİLİR SEARCH. 
+        5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.                     
                // Ensures that only sustained trends are analyzed.
         2,     // min_trend_count: Minimum number of consistent trends required for cubic analysis.
                // Helps filter out noise and minor fluctuations.
@@ -280,7 +281,67 @@ static void OnEntryUndecidedTrendCase(void) {  //ÜZERİNE YAZIYOR.
 /**
  * @brief Entry function for the SWP_PEAK_CENTERING state.
  *
- * This function centers the peak within the window by adjusting the buffer based on gradient analysis.
+ * This function attempts to center the detected peak within the current window of data.
+ * It performs the following steps:
+ *
+ * ### Function Workflow:
+ * 1. **Reset State Completion Flag**:
+ *    - Resets the `isComplete` flag for the current state to indicate processing has started.
+ * 2. **Compute Total Sum of Second-Order Gradients**:
+ *    - Calculates the total sum of second-order gradients over the current data window.
+ *    - Uses the `compute_total_second_order_gradient` function with a forgetting factor.
+ *    - The second-order gradient provides information about the curvature of the data.
+ * 3. **Check if Peak is Centered**:
+ *    - Compares the total gradient sum with a predefined threshold (`centered_gradient_sum`).
+ *    - If the sum is less than or equal to this threshold, the peak is considered centered.
+ *    - Sets `currentStatus.isCentered` to `1` and marks the state as complete.
+ * 4. **Analyze Gradient Trends**:
+ *    - If the peak is not centered, it analyzes the gradient trends using quadratic regression.
+ *    - Calls `track_gradient_trends_with_quadratic_regression` to get increasing and decreasing trend information.
+ * 5. **Validate Trend Data**:
+ *    - Checks if both increasing and decreasing trends are valid.
+ *    - If not, considers the peak centered to prevent infinite loops and marks the state as complete.
+ * 6. **Calculate Trend Durations**:
+ *    - Calculates the durations of the increasing and decreasing trends.
+ *    - Adjusts for buffer wrapping using modulo arithmetic.
+ * 7. **Determine Shift Direction and Amount**:
+ *    - Compares the durations of the trends to decide the direction to shift.
+ *    - If the increasing duration is longer, the peak is to the left (shift right).
+ *    - If the decreasing duration is longer, the peak is to the right (shift left).
+ *    - Calculates the shift amount as the difference between the durations.
+ * 8. **Adjust Data Window**:
+ *    - Calls `update_buffer_for_direction` to shift the data window accordingly.
+ *    - Does not mark the state as complete to allow re-entry and re-evaluation.
+ * 9. **Handle Peak Centered Cases**:
+ *    - If the durations are equal or the shift amount is zero, considers the peak centered.
+ *    - Marks the state as complete.
+ * 10. **State Transition**:
+ *     - If the state is complete, calls `SwpProcessStateChange` to transition to the next state.
+ *
+ * ### Mathematical Background:
+ * - **Second-Order Gradients**:
+ *   - Provide information about the curvature (concavity/convexity) of the data.
+ *   - Calculated using quadratic regression over the data window.
+ *   - A total sum close to zero indicates symmetry around the peak.
+ * - **Quadratic Regression**:
+ *   - Fits a quadratic model to the data: \( y = ax^2 + bx + c \).
+ *   - The second derivative (second-order gradient) is \( 2a \), representing curvature.
+ * - **Trend Analysis**:
+ *   - Identifies consistent increasing or decreasing trends in the second-order gradients.
+ *   - Uses durations of trends to determine the asymmetry of the peak.
+ * - **Buffer Shifting**:
+ *   - Adjusts the data window by shifting it left or right to center the peak.
+ *   - The shift amount is based on the difference in trend durations.
+ *
+ * @note
+ * - The function uses global variables like `buffer_manager`, `quadratic_analysis_params`, and `currentStatus`.
+ * - It is part of a state machine managing the sliding window analysis process.
+ * - The state machine will re-enter this state if the peak is not yet centered after shifting.
+ *
+ * @see compute_total_second_order_gradient
+ * @see track_gradient_trends_with_quadratic_regression
+ * @see update_buffer_for_direction
+ * @see SwpProcessStateChange
  */
 static void OnEntryPeakCentering(void) {
     // Reset the isComplete flag

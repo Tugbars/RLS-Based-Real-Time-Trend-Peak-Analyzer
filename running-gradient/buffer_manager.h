@@ -39,9 +39,6 @@ typedef struct {
 /** @brief Extern declaration of the buffer manager for usage across different files. */
 extern BufferManager buffer_manager;
 
-/** @brief Declare the buffer array accessible from other files. */
-extern MqsRawDataPoint_t buffer[BUFFER_SIZE];
-
 /**
  * @brief Initializes the BufferManager structure with starting values.
  *
