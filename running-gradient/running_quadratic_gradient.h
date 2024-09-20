@@ -13,11 +13,13 @@
 // #define DEBUG_QUADRATIC
 
 /**
- * @brief Structure to store the result of quadratic peak analysis.
+ * @brief Structure to store the result of quadratic peak analysis and verification.
  */
 typedef struct {
     bool peak_found;     /**< Flag indicating if a peak was found and verified. */
     uint16_t peak_index; /**< Index of the detected peak in the data array. */
+    bool is_truncated_left;  /**< Flag indicating if the verification was truncated on the left side. */
+    bool is_truncated_right; /**< Flag indicating if the verification was truncated on the right side. */
 } QuadraticPeakAnalysisResult;
 
 /**
@@ -31,6 +33,15 @@ typedef struct {
     bool isPotentialPeak;  /**< Indicates if a potential peak is detected. */
     bool isTruePeak;       /**< Indicates if a true peak is detected. */
 } ConcavityAnalysisOutput;
+
+/**
+ * @brief Struct to store the result of the quadratic peak verification process.
+ */
+typedef struct {
+    bool isPeakFound;          /**< Flag indicating if the peak is verified. */
+    bool isTruncatedLeft;      /**< Flag indicating if the peak is truncated on the left side. */
+    bool isTruncatedRight;     /**< Flag indicating if the peak is truncated on the right side. */
+} QuadraticPeakVerificationResult;
 
 /**
  * @brief Tracks the second-order gradient trends within a specified window using quadratic regression.

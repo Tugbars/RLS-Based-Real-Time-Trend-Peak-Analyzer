@@ -246,9 +246,9 @@ double calculate_second_order_gradient(const RunningQuadraticGradient *rg) {
  * @param peak_index The index of the detected peak within the second_order_gradients array.
  * @param start_index The starting index in the original data array corresponding to the first element of second_order_gradients.
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return bool True if the peak is verified based on the trend analysis, false otherwise.
+ * @return QuadraticPeakAnalysisResult Struct containing the verification result and truncation flags.
  */
-bool verify_quadratic_peak(
+QuadraticPeakAnalysisResult verify_quadratic_peak(
     const MqsRawDataPoint_t *values,
     uint16_t length,
     const double *second_order_gradients,
@@ -256,15 +256,11 @@ bool verify_quadratic_peak(
     uint16_t start_index,
     double forgetting_factor
 ) {
+    QuadraticPeakAnalysisResult result = { .peak_found = false, .peak_index = peak_index, .is_truncated_left = false, .is_truncated_right = false };
     uint16_t left_trend_count = 0;
     uint16_t right_trend_count = 0;
     uint16_t inconsistency_count_left = 0;
     uint16_t inconsistency_count_right = 0;
-
-    // For debugging: Output global parameters
-    //printf("Debugging verify_quadratic_peak:\n");
-    //printf("minimum_required_trend_count: %d\n", quadratic_analysis_params.minimum_required_trend_count);
-    //printf("allowable_inconsistency_count: %d\n", quadratic_analysis_params.allowable_inconsistency_count);
 
     // Count increasing trends on the left side of the peak
     for (int i = peak_index; i > 0; --i) {
@@ -277,6 +273,11 @@ bool verify_quadratic_peak(
                 break;
             }
         }
+    }
+
+    // Check for truncation on the left side
+    if (peak_index - left_trend_count <= 0) {
+        result.is_truncated_left = true;
     }
 
     // Count decreasing trends on the right side of the peak
@@ -292,16 +293,18 @@ bool verify_quadratic_peak(
         }
     }
 
-    printf("Left trends count: %u, Right trends count: %u\n", left_trend_count, right_trend_count);
+    // Check for truncation on the right side
+    if (peak_index + right_trend_count >= RLS_WINDOW - 1) {
+        result.is_truncated_right = true;
+    }
 
     // Verify if the peak meets the criteria
-    bool peak_verified = left_trend_count >= quadratic_analysis_params.minimum_required_trend_count &&
-                         right_trend_count >= quadratic_analysis_params.minimum_required_trend_count;
+    result.peak_found = left_trend_count >= quadratic_analysis_params.minimum_required_trend_count &&
+                        right_trend_count >= quadratic_analysis_params.minimum_required_trend_count;
 
-    //printf("Peak verification result: %s\n", peak_verified ? "True" : "False");
-
-    return peak_verified;
+    return result;
 }
+
 
 /**
  * @brief Finds and verifies a peak in the data using quadratic RLS.
@@ -314,7 +317,7 @@ bool verify_quadratic_peak(
  * @param length Length of the data array.
  * @param start_index The start index in the data array from which to begin the gradient calculation.
  * @param forgetting_factor The forgetting factor used in the RLS algorithm.
- * @return QuadraticPeakAnalysisResult Structure containing the peak detection status and the peak index if found and verified.
+ * @return QuadraticPeakAnalysisResult Structure containing the peak detection status, truncation flags, and the peak index if found and verified.
  */
 QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
     QuadraticPeakAnalysisResult result = { .peak_found = false, .peak_index = 0 };
@@ -347,13 +350,13 @@ QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint
             result.peak_index = start_index + i;
 
             // Verify the detected peak
-            if (verify_quadratic_peak(values, length, second_order_gradients, i, start_index, forgetting_factor)) {
-                result.peak_found = true;
+            result = verify_quadratic_peak(values, length, second_order_gradients, i, start_index, forgetting_factor);
+
+            if (result.peak_found) {
                 printf("Verified peak found at index %u\n", result.peak_index);
                 break; // Exit the loop once a verified peak is found
             } else {
                 printf("Peak at index %u did not pass verification. Continuing search...\n", result.peak_index);
-                result.peak_found = false; // Reset peak_found as the peak failed verification
             }
         }
     }

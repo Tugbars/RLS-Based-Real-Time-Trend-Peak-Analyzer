@@ -17,6 +17,10 @@
 #define BUFFER_SIZE 200
 //#define BUFFER_DEBUG
 
+// Global indices for tracking analysis window
+extern int analysis_start_index;  // Track the initial start index
+extern int analysis_end_index;    // Track the final end index
+
 /**
  * @struct BufferManager
  * @brief Structure to manage the buffer and indices for sliding window analysis.
@@ -95,6 +99,10 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
  * @param phase_angle_size The total size of the phase angle array.
  */
 void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
+
+void move_window_and_update_if_needed(const double* phaseAngles, int direction, int move_amount);
+
+void print_analysis_interval(const double* phaseAngles, int total_size);
 
 
 #endif // BUFFER_MANAGER_H

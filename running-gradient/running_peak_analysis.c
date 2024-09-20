@@ -284,10 +284,11 @@ end_analysis:
  * @param phase_angle_size The size of the phase angle array.
  * @param start_index The starting index for peak verification.
  */
-void verify_peak_at_index(uint16_t buffer_start_index) {
-    printf("[verify_peak_at_index] Verifying peak at buffer index: %d\n", buffer_start_index);
+bool verify_peak_at_index(uint16_t buffer_start_index) {
+    // Print the buffer start index being verified
+    printf("[verify_peak_at_index] Verifying peak at buffer start index: %d\n", buffer_start_index);
 
-    // Call the find_and_verify_cubic_peak function using the current buffer index
+    // Call the find_and_verify_quadratic_peak function using the current buffer index
     QuadraticPeakAnalysisResult peak_result = find_and_verify_quadratic_peak(
         buffer_manager.buffer,  // Pointer to the buffer
         buffer_manager.buffer_size,  // Total buffer size
@@ -295,11 +296,31 @@ void verify_peak_at_index(uint16_t buffer_start_index) {
         0.5                      // Forgetting factor for RLS analysis
     );
 
+    // Debugging: Print out the results from the find_and_verify_quadratic_peak function
+    printf("[verify_peak_at_index] Peak result:\n");
+    printf("  peak_found: %d\n", peak_result.peak_found);
+    printf("  peak_index: %d\n", peak_result.peak_index);
+    printf("  is_truncated_left: %d\n", peak_result.is_truncated_left);
+    printf("  is_truncated_right: %d\n", peak_result.is_truncated_right);
+
+    // If a peak is found, adjust the peak index to match the real phaseAngle array
     if (peak_result.peak_found) {
+        // Debugging: Print current buffer and phase information
+        printf("[verify_peak_at_index] Debugging current buffer state:\n");
+        printf("  buffer_manager.current_phase_index: %d\n", buffer_manager.current_phase_index);
+        printf("  buffer_start_index: %d\n", buffer_start_index);
+        printf("  peak_result.peak_index: %d\n", peak_result.peak_index);
+
         // Adjust the peak index to match the real phaseAngle array
-        uint16_t real_peak_index = buffer_manager.current_phase_index + (peak_result.peak_index - buffer_start_index);
+        uint16_t real_peak_index = buffer_manager.current_phase_index + (peak_result.peak_index);
+
+        // Print the real peak index in the phaseAngle array
         printf("[verify_peak_at_index] Verified peak found at real phaseAngle index: %d\n", real_peak_index);
+
+        return true;
     } else {
         printf("[verify_peak_at_index] Peak verification failed at buffer index: %d\n", buffer_start_index);
+        return false;
     }
 }
+
