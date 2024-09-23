@@ -18,6 +18,8 @@
 BufferManager buffer_manager;
 int analysis_start_index = -1;  // Track the initial start index
 int analysis_end_index = -1;    // Track the final end index
+int buffer_shift_offset = 0;  // New global variable to track the shift relative to the buffer.
+
 
 /**
  * @brief Initializes the BufferManager struct with starting values.
@@ -64,6 +66,7 @@ void init_buffer_manager(
 
     // Set the initial end index (will be updated dynamically)
     analysis_end_index = start_index + window_size - 1;
+    buffer_shift_offset = 0;
 
     #ifdef BUFFER_DEBUG
     printf("Buffer Manager initialized:\n");
@@ -111,6 +114,11 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
     printf("Analysis start index set to %d, end index set to %d\n", analysis_start_index, analysis_end_index);
     #endif
 }
+
+//move_amount mantığı yerleştirilmeli. 
+//bir önceki phase Shit'e göre farkından move amount ölçülmeli. 
+//bu sadece move amountu
+// update_phaseAngle_toBuffer starts from the moved phaseIndex and updates to the buffer which has its index is also moved by the move_amount in the functipn. 
 
 
 /**
@@ -253,30 +261,20 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
         #endif
         return;
     }
-
-    // Update the buffer with new phase angles
-    update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index);
     
-    #ifdef BUFFER_DEBUG
-    // Log the mapping of phaseAngle to buffer indices
-    printf("\n[DEBUG] PhaseAngle to Buffer Mapping after Sliding Window Shift:\n");
-    for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
-        int16_t phase_index = phase_index_start + i;
-        int16_t buffer_index = (buffer_start_index + i) % buffer_manager.buffer_size;
-        printf("Buffer[%d] <- PhaseAngle[%d] = %.6f\n",
-               buffer_index, phase_index, phaseAngles[phase_index]);
-    }
-    #endif
-
+    
     // Update the current phase and buffer indices
     buffer_manager.current_phase_index = phase_index_start;
     buffer_manager.current_buffer_index = buffer_start_index;
-
+    
     // Log final indices after update
     //#ifdef BUFFER_DEBUG
     printf("[update_buffer] Updated buffer indices. Current phase index: %d, Buffer start index: %d\n",
            buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
     //#endif
+
+    // Update the buffer with new phase angles
+    update_phaseAngle_to_buffer(phaseAngles, phase_index_start, buffer_start_index);
 }
 
 /**
@@ -313,14 +311,15 @@ void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size)
     #ifdef BUFFER_DEBUG
     printf("[handle_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
     #endif
-    update_phaseAngle_to_buffer(phaseAngles, buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
-
-    // Log the buffer after loading new data
+    
+        // Log the buffer after loading new data
     #ifdef BUFFER_DEBUG
     printf("[handle_undecided_case] Loaded new phase angle values into the buffer. Starting analysis from buffer index %d.\n",
            buffer_manager.current_buffer_index);
     printf("Updated analysis interval: Start index = %d, End index = %d\n", analysis_start_index, analysis_end_index);
     #endif
+    
+    update_phaseAngle_to_buffer(phaseAngles, buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
 }
 
 /**
@@ -360,7 +359,6 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
         // Only update the analysis_end_index if the new end index exceeds the current one
         if (new_phase_index_end > analysis_end_index) {
             analysis_end_index = new_phase_index_end;
-            printf("[move_window_and_update_if_needed] Analysis end index updated to: %d\n", analysis_end_index);
         }
     } else {
         return;  // Invalid direction, no action
@@ -368,9 +366,15 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
 
     // Check if the new window is already covered by the global tracking indices
     if (new_phase_index_start >= analysis_start_index && new_phase_index_end <= analysis_end_index) {
-        // The new window is already fully loaded in the buffer, no need to reload
+        // Track how much we have shifted the buffer relative to the original buffer start
+        buffer_shift_offset += move_amount;  // Track the shift without buffer update
+        buffer_shift_offset %= buffer_manager.buffer_size;  // Wrap it within buffer bounds
+
         printf("[move_window_and_update_if_needed] Window already in buffer. Moving without update.\n");
     } else {
+        // Reset the shift offset if we are reloading the buffer
+        buffer_shift_offset = 0;
+
         // The new window needs to load values from `phaseAngles`
         printf("[move_window_and_update_if_needed] Loading new window values into the buffer.\n");
         update_buffer_for_direction(phaseAngles, direction, move_amount);
@@ -387,13 +391,10 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
     buffer_manager.current_buffer_index = buffer_start_index;
 
     // Debug: Print the updated indices
-    #ifdef BUFFER_DEBUG
     printf("[move_window_and_update_if_needed] Updated window to phase index [%d - %d]\n", 
            new_phase_index_start, new_phase_index_end);
     printf("Updated buffer index to %d\n", buffer_manager.current_buffer_index);
-    #endif
 }
-
 
 /**
  * @brief Prints the values within the tracked interval of phase indices from the beginning to the end.
@@ -421,18 +422,21 @@ void print_analysis_interval(const double* phaseAngles, int total_size) {
     // Ensure the buffer index is correctly calculated for circular wrapping
     for (int phase_index = analysis_start_index; phase_index <= analysis_end_index && phase_index < total_size; ++phase_index) {
         // Calculate the corresponding buffer index relative to the window position
-        int buffer_index = (buffer_manager.current_buffer_index + (phase_index - analysis_start_index)) % buffer_manager.buffer_size;
+        int relative_position_in_window = phase_index - analysis_start_index;
 
-        // Debugging: Ensure buffer index is non-negative (for correct circular buffer handling)
-        if (buffer_index < 0) {
-            buffer_index += buffer_manager.buffer_size;
+        // Adjust buffer index by the shift offset to account for window movement without update
+        int adjusted_buffer_index = (buffer_manager.current_buffer_index + relative_position_in_window - buffer_shift_offset) % buffer_manager.buffer_size;
+
+        // Handle negative buffer index wrap-around
+        if (adjusted_buffer_index < 0) {
+            adjusted_buffer_index += buffer_manager.buffer_size;
         }
 
         // Print the buffer values
         printf("Phase Index %d -> Buffer Index %d: Phase Angle: %.6f, Impedance: %.6f\n",
-               phase_index, buffer_index,
-               buffer_manager.buffer[buffer_index].phaseAngle,
-               buffer_manager.buffer[buffer_index].impedance);
+               phase_index, adjusted_buffer_index,
+               buffer_manager.buffer[adjusted_buffer_index].phaseAngle,
+               buffer_manager.buffer[adjusted_buffer_index].impedance);
     }
 
     printf("--------------------------------------\n");

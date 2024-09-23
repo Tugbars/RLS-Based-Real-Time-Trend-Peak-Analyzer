@@ -290,7 +290,7 @@ void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDa
     if (condition_number > 1e8) {
         // Reset the inverse covariance matrix if condition number is too high
         init_inverse_covariance_matrix(rg);
-        printf("Resetting inverse covariance matrix due to high condition number: %.2e\n", condition_number);
+        //printf("Resetting inverse covariance matrix due to high condition number: %.2e\n", condition_number);
     }
 }
 
