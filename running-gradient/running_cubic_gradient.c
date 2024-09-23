@@ -10,6 +10,50 @@
 
 #include "running_peak_analysis.h"
 
+/**
+ * @brief Initializes the inverse covariance matrix for cubic regression using RLS.
+ * 
+ * The diagonal elements are set to large values, representing high initial uncertainty about the model.
+ *
+ * @param rg Pointer to the RunningCubicGradient structure.
+ */
+static void init_inverse_covariance_matrix(RunningCubicGradient *rg) {
+    memset(rg->inverse_cov_matrix, 0, sizeof(rg->inverse_cov_matrix));  // Set all elements to 0
+    rg->inverse_cov_matrix[0][0] = 1e9; // High uncertainty in x^3 coefficient
+    rg->inverse_cov_matrix[1][1] = 1e9; // High uncertainty in x^2 coefficient
+    rg->inverse_cov_matrix[2][2] = 1e9; // High uncertainty in x coefficient
+    rg->inverse_cov_matrix[3][3] = 1e9; // High uncertainty in constant term
+}
+
+/**
+ * @brief Computes the condition number of the inverse covariance matrix to monitor numerical stability.
+ * 
+ * This function checks the ratio of the largest to smallest diagonal element of the inverse covariance matrix.
+ *
+ * @param matrix The 4x4 inverse covariance matrix.
+ * @return The condition number, approximated using the diagonal elements.
+ */
+static double compute_condition_number(const double matrix[4][4]) {
+    double max_value = fabs(matrix[0][0]);
+    double min_value = fabs(matrix[0][0]);
+
+    // Find the maximum and minimum diagonal elements
+    for (int i = 0; i < 4; ++i) {
+        if (fabs(matrix[i][i]) > max_value) {
+            max_value = fabs(matrix[i][i]);
+        }
+        if (fabs(matrix[i][i]) < min_value) {
+            min_value = fabs(matrix[i][i]);
+        }
+    }
+
+    // Avoid division by zero or very small numbers
+    if (min_value < 1e-10) {
+        min_value = 1e-10;
+    }
+
+    return max_value / min_value;
+}
 
 /**
  * @brief Initializes the RunningCubicGradient structure for cubic regression using Recursive Least Squares (RLS).
@@ -27,24 +71,20 @@
 void init_running_cubic_gradient(RunningCubicGradient *rg, double forgetting_factor) {
     rg->num_points = 0;
     rg->max_points = CUBIC_RLS_WINDOW;
-    
+
     // Initialize coefficients to zero
     for (int i = 0; i < 4; ++i) {
         rg->coefficients[i] = 0.0;
     }
-    
+
     // Initialize residual sum of squares to zero
     rg->residual_sum_squares = 0.0;
-    
+
     // Set the forgetting factor
     rg->forgetting_factor = forgetting_factor;
-    
+
     // Initialize the inverse covariance matrix
-    memset(rg->inverse_cov_matrix, 0, sizeof(rg->inverse_cov_matrix));
-    rg->inverse_cov_matrix[0][0] = 1e9; // High uncertainty in x^3 coefficient
-    rg->inverse_cov_matrix[1][1] = 1e9; // High uncertainty in x^2 coefficient
-    rg->inverse_cov_matrix[2][2] = 1e9; // High uncertainty in x coefficient
-    rg->inverse_cov_matrix[3][3] = 1e9; // High uncertainty in constant term
+    init_inverse_covariance_matrix(rg);
 }
 
 /**
@@ -154,6 +194,13 @@ void add_cubic_data_point(RunningCubicGradient *const rg, const MqsRawDataPoint_
     for (uint16_t i = 0; i < rg->num_points; ++i) {
         double error = rg->y[i] - (rg->coefficients[0] * pow(rg->x[i], 3) + rg->coefficients[1] * pow(rg->x[i], 2) + rg->coefficients[2] * rg->x[i] + rg->coefficients[3]);
         rg->residual_sum_squares += error * error;
+    }
+    
+    // Monitor the condition number of the inverse covariance matrix
+    double condition_number = compute_condition_number(rg->inverse_cov_matrix);
+    if (condition_number > 1e8) {
+        init_inverse_covariance_matrix(rg);  // Reset inverse covariance matrix if condition number is too high
+        //printf("Resetting inverse covariance matrix due to high condition number: %.2e\n", condition_number);
     }
 }
 
@@ -678,5 +725,3 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
 
     return result;
 }
-
-//ilk average increase or decrease meselesini halletmemiz lazım. 

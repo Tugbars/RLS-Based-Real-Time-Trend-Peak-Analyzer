@@ -44,14 +44,15 @@ typedef void (*Callback_t)(void);
  * This enum defines the various states that the sliding window analysis can be in.
  */
 typedef enum {
-    SWP_INITIAL_ANALYSIS,        /**< Initial analysis state where the data is first processed. */
-    SWP_SEGMENT_ANALYSIS,        /**< State for analyzing segments within the window. */
-    SWP_UPDATE_BUFFER_DIRECTION, /**< State for updating the buffer direction based on analysis. */
-    SWP_UNDECIDED_TREND_CASE,    /**< State when the trend is undecided. */
-    SWP_PEAK_CENTERING,          /**< State for centering the analysis window on a detected peak. */
-    SWP_PEAK_FINDING_ANALYSIS,   /**< State for performing detailed peak finding analysis. */
-    SWP_WAITING,                 /**< Waiting state, possibly for more data or user input. */
-    SWP_STATE_LAST               /**< Sentinel value indicating the last state; used for bounds checking. */
+    SWP_INITIAL_ANALYSIS,
+    SWP_SEGMENT_ANALYSIS,
+    SWP_UPDATE_BUFFER_DIRECTION,
+    SWP_UNDECIDED_TREND_CASE,
+    SWP_PEAK_CENTERING,
+    SWP_PEAK_FINDING_ANALYSIS,
+    SWP_PEAK_TRUNCATION_HANDLING,  // New state
+    SWP_WAITING,
+    SWP_STATE_LAST  // This should always be last
 } SwpState_t;
 
 /**
@@ -63,6 +64,8 @@ typedef enum {
 typedef struct {
     PeakPosition direction;       /**< Current direction based on peak analysis (LEFT, RIGHT, ON_PEAK, UNDECIDED). */
     Callback_t callback;          /**< Callback function to be invoked during the analysis. */
+    bool isTruncatedLeft;         // New field
+    bool isTruncatedRight;         // New field
     const double* phaseAngles;    /**< Pointer to the array of phase angles to be analyzed. */
     uint16_t phase_angle_size;    /**< Size of the phase angles array. */
 } SlidingWindowAnalysisContext;

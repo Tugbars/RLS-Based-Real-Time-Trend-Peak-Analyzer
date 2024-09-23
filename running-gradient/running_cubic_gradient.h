@@ -19,14 +19,14 @@
  * of the cubic model, the inverse covariance matrix for efficient coefficient updates, and other relevant data.
  */
 typedef struct {
-    double coefficients[4];               /**< Coefficients for the cubic model: x^3, x^2, x, and constant term. */
-    double inverse_cov_matrix[4][4];      /**< 4x4 inverse covariance matrix for RLS updates. */
-    double forgetting_factor;             /**< The forgetting factor for the RLS algorithm, typically close to 1. */
-    double y[CUBIC_RLS_WINDOW];           /**< Array to store y values used in the regression. */
-    double x[CUBIC_RLS_WINDOW];           /**< Array to store x values used in the regression. */
-    double residual_sum_squares;          /**< The sum of squared residuals for the regression model. */
-    uint16_t num_points;                  /**< The number of data points currently in the window. */
-    uint16_t max_points;                  /**< The maximum number of points allowed in the window (usually CUBIC_RLS_WINDOW). */
+    uint16_t num_points;            /**< Number of data points currently stored */
+    uint16_t max_points;            /**< Maximum number of data points that can be stored */
+    double x[CUBIC_RLS_WINDOW];     /**< Array of x values */
+    double y[CUBIC_RLS_WINDOW];     /**< Array of y values */
+    double coefficients[4];         /**< Coefficients of the cubic regression model (a3, a2, a1, a0) */
+    double residual_sum_squares;    /**< Residual sum of squares for the regression */
+    double inverse_cov_matrix[4][4];/**< Inverse covariance matrix for RLS update */
+    double forgetting_factor;       /**< Forgetting factor for the RLS algorithm */
 } RunningCubicGradient;
 
 /**

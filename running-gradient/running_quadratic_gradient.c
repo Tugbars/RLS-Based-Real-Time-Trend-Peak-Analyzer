@@ -15,45 +15,144 @@
  * linear term, and intercept.
  */
 typedef struct {
-    uint16_t num_points; /**< Number of data points currently stored */
-    uint16_t max_points; /**< Maximum number of data points that can be stored */
-    double x[RLS_WINDOW]; /**< Array of x values */
-    double y[RLS_WINDOW]; /**< Array of y values */
-    double coefficients[3]; /**< Coefficients of the quadratic regression model (a2, a1, a0) */
-    double residual_sum_squares; /**< Residual sum of squares for the regression */
-    double inverse_cov_matrix[3][3]; /**< Inverse covariance matrix for RLS update */
-    double forgetting_factor; /**< Forgetting factor for the RLS algorithm */
+    uint16_t num_points;            /**< Number of data points currently stored */
+    uint16_t max_points;            /**< Maximum number of data points that can be stored */
+    double x[RLS_WINDOW];           /**< Array of x values */
+    double y[RLS_WINDOW];           /**< Array of y values */
+    double coefficients[3];         /**< Coefficients of the quadratic regression model (a2, a1, a0) */
+    double residual_sum_squares;    /**< Residual sum of squares for the regression */
+    double inverse_cov_matrix[3][3];/**< Inverse covariance matrix for RLS update */
+    double forgetting_factor;       /**< Forgetting factor for the RLS algorithm */
 } RunningQuadraticGradient;
 
-/**con
+/**
+ * @brief Initializes the inverse covariance matrix for the RLS algorithm.
+ * 
+ * This function sets the diagonal elements of the matrix to large values,
+ * representing high initial uncertainty about the model coefficients.
+ *
+ * @param rg Pointer to the RunningQuadraticGradient structure.
+ */
+void init_inverse_covariance_matrix(RunningQuadraticGradient *rg) {
+    memset(rg->inverse_cov_matrix, 0, sizeof(rg->inverse_cov_matrix));  // Set all elements to 0
+    rg->inverse_cov_matrix[0][0] = 1e9; // High uncertainty in x^2 coefficient
+    rg->inverse_cov_matrix[1][1] = 1e9; // High uncertainty in x coefficient
+    rg->inverse_cov_matrix[2][2] = 1e9; // High uncertainty in constant term
+}
+
+/**
  * @brief Initializes the RunningQuadraticGradient structure.
  *
  * This function sets the initial values for the coefficients, residual sum of squares,
- * inverse covariance matrix, and allocates memory for x and y arrays for the quadratic model.
+ * and calls an external function to initialize the inverse covariance matrix.
  *
  * @param rg Pointer to the RunningQuadraticGradient structure to initialize.
  * @param forgetting_factor Forgetting factor for the RLS algorithm.
  */
 void init_running_quadratic_gradient(RunningQuadraticGradient *rg, double forgetting_factor) {
-	rg->num_points = 0;
-	rg->max_points = RLS_WINDOW;
-	
-	// Initialize coefficients to zero
-	rg->coefficients[0] = 0.0;
-	rg->coefficients[1] = 0.0;
-	rg->coefficients[2] = 0.0;
-	
-	// Initialize residual sum of squares to zero
-	rg->residual_sum_squares = 0.0;
-	
-	// Set the forgetting factor
-	rg->forgetting_factor = forgetting_factor;
-	
-	// Initialize the inverse covariance matrix
-	memset(rg->inverse_cov_matrix, 0, sizeof(rg->inverse_cov_matrix));
-	rg->inverse_cov_matrix[0][0] = 1e9; // High uncertainty in x^2 coefficient
-	rg->inverse_cov_matrix[1][1] = 1e9; // High uncertainty in x coefficient
-	rg->inverse_cov_matrix[2][2] = 1e9; // High uncertainty in constant term
+    rg->num_points = 0;
+    rg->max_points = RLS_WINDOW;
+
+    // Initialize coefficients to zero
+    rg->coefficients[0] = 0.0;
+    rg->coefficients[1] = 0.0;
+    rg->coefficients[2] = 0.0;
+
+    // Initialize residual sum of squares to zero
+    rg->residual_sum_squares = 0.0;
+
+    // Set the forgetting factor
+    rg->forgetting_factor = forgetting_factor;
+
+    // Initialize the inverse covariance matrix externally
+    init_inverse_covariance_matrix(rg);
+}
+
+/**
+ * @brief Computes the condition number of the inverse covariance matrix to assess numerical stability.
+ * 
+ * The condition number is a measure of the sensitivity of a matrix to numerical errors. It is computed as the ratio
+ * of the largest to smallest singular values. For symmetric positive-definite matrices like the inverse covariance matrix,
+ * we approximate the condition number using the largest and smallest diagonal elements.
+ *
+ * ### Mathematical Background:
+ * The condition number \(\kappa(A)\) is defined as:
+ * \f[
+ * \kappa(A) = \frac{\sigma_{\text{max}}}{\sigma_{\text{min}}}
+ * \f]
+ * where \(\sigma_{\text{max}}\) and \(\sigma_{\text{min}}\) are the largest and smallest singular values of the matrix \(A\).
+ * A large condition number indicates that the matrix is close to singular, leading to instability and large numerical errors.
+ *
+ * ### Importance in RLS:
+ * In the Recursive Least Squares (RLS) algorithm, the inverse covariance matrix is updated iteratively. If it becomes ill-conditioned
+ * (i.e., high condition number), the algorithm may become unstable. Monitoring and resetting the inverse covariance matrix when
+ * the condition number exceeds a threshold helps ensure numerical stability.
+ *
+ * @param matrix The 3x3 inverse covariance matrix from the RLS algorithm.
+ * @return The condition number, approximated as the ratio of the largest to smallest diagonal element.
+ */
+double compute_condition_number(const double matrix[3][3]) {
+    double max_value = fabs(matrix[0][0]);
+    double min_value = fabs(matrix[0][0]);
+
+    // Find the maximum and minimum diagonal elements
+    for (int i = 0; i < 3; ++i) {
+        if (fabs(matrix[i][i]) > max_value) {
+            max_value = fabs(matrix[i][i]);
+        }
+        if (fabs(matrix[i][i]) < min_value) {
+            min_value = fabs(matrix[i][i]);
+        }
+    }
+
+    // Avoid division by zero or very small numbers
+    if (min_value < 1e-10) {
+        min_value = 1e-10;
+    }
+
+    return max_value / min_value;
+}
+
+/**
+ * @brief Normalizes the x and y data arrays in the RunningQuadraticGradient structure.
+ *
+ * This function normalizes the x and y data points by subtracting their mean and dividing by their standard deviation.
+ * Normalization improves numerical stability, especially in RLS, by ensuring that data values are within a reasonable range,
+ * avoiding large discrepancies between data scales that could lead to ill-conditioning in matrix operations.
+ *
+ * @param rg Pointer to the RunningQuadraticGradient structure containing the data to normalize.
+ */
+void normalize_data(RunningQuadraticGradient *rg) {
+    double x_mean = 0.0;
+    double y_mean = 0.0;
+    double x_var = 0.0;
+    double y_var = 0.0;
+    
+    // Compute the mean of x and y
+    for (uint16_t i = 0; i < rg->num_points; ++i) {
+        x_mean += rg->x[i];
+        y_mean += rg->y[i];
+    }
+    x_mean /= rg->num_points;
+    y_mean /= rg->num_points;
+    
+    // Compute the variance (standard deviation squared) of x and y
+    for (uint16_t i = 0; i < rg->num_points; ++i) {
+        x_var += pow(rg->x[i] - x_mean, 2);
+        y_var += pow(rg->y[i] - y_mean, 2);
+    }
+    x_var = sqrt(x_var / rg->num_points);  // Standard deviation of x
+    y_var = sqrt(y_var / rg->num_points);  // Standard deviation of y
+    
+    // Avoid division by zero by ensuring standard deviations are not too small
+    if (x_var < 1e-6) x_var = 1.0;
+    if (y_var < 1e-6) y_var = 1.0;
+    
+    // Normalize x and y by subtracting the mean and dividing by the standard deviation
+    for (uint16_t i = 0; i < rg->num_points; ++i) {
+        rg->x[i] = (rg->x[i] - x_mean) / x_var;
+        rg->y[i] = (rg->y[i] - y_mean) / y_var;
+    }
 }
 
 /**
@@ -128,6 +227,9 @@ void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDa
         rg->x[rg->max_points - 1] = (double)(rg->num_points);
         rg->num_points++;
     }
+    
+     // Normalize data after updating
+    //normalize_data(rg); //optimnal too experimental.
 
     // Define the input vector for the new data point
     // The input vector for quadratic fitting is x^2, x, and 1 (for the intercept).
@@ -144,8 +246,8 @@ void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDa
 
     // Check for numerical stability
     if (fabs(temp) < 1e-10) {
-        fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
-        exit(EXIT_FAILURE);
+        //fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
+        //exit(EXIT_FAILURE);
     }
 
     // Calculate the temporary vector used for updating the inverse covariance matrix
@@ -181,6 +283,14 @@ void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDa
     for (uint16_t i = 0; i < rg->num_points; ++i) {
         double error = rg->y[i] - (rg->coefficients[0] * pow(rg->x[i], 2) + rg->coefficients[1] * rg->x[i] + rg->coefficients[2]);
         rg->residual_sum_squares += error * error;
+    }
+    
+      // Check for numerical stability and condition number
+    double condition_number = compute_condition_number(rg->inverse_cov_matrix);
+    if (condition_number > 1e8) {
+        // Reset the inverse covariance matrix if condition number is too high
+        init_inverse_covariance_matrix(rg);
+        printf("Resetting inverse covariance matrix due to high condition number: %.2e\n", condition_number);
     }
 }
 
@@ -369,19 +479,65 @@ QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint
 }
 
 /**
- * @brief Computes the second-order gradients for the next 30 values(WINDOW_SIZE) in the given array.
- *
- * This function takes an array of doubles and a starting index, and then adds each of the next 30 values
- * to the RunningQuadraticGradient structure. After each addition, it computes the second-order gradient
- * (curvature) of the quadratic model. The function returns an array containing these second-order gradients.
- *
- * @param values Array of double values.
- * @param length Length of the array.
- * @param start_index Starting index from which to begin the gradient calculation.
- * @param forgetting_factor The forgetting factor for the RLS algorithm.
- * @return An array of double containing the second-order gradients.
+ * @brief Computes the weighted total sum of second-order gradients using quadratic RLS, 
+ *        with an emphasis on reducing the impact of early, unstable gradients.
+ * 
+ * ### Problem Context:
+ * The Recursive Least Squares (RLS) algorithm, while powerful for real-time smoothing and regression, 
+ * can exhibit instability or aggressive behavior when adding initial data points, especially in the 
+ * early stages of computation when the model is not fully formed. This can result in overshooting 
+ * or erratic gradient values. 
+ * 
+ * To mitigate this issue, we introduce a weighting system that reduces the influence of the early 
+ * second-order gradients during the summation process. The idea is to give less weight to the gradients 
+ * calculated from early points, allowing the model to stabilize before heavily influencing the final result.
+ * 
+ * ### Weighting Approach:
+ * We apply an exponential weighting function to the second-order gradients. This weighting system 
+ * ensures that the influence of early gradients is minimized, and the later gradients—after the RLS 
+ * algorithm has had time to stabilize—carry more weight in the final sum.
+ * 
+ * The exponential weighting is defined as:
+ * \f[
+ * w_i = 1 - e^{-\alpha \cdot i}
+ * \f]
+ * Where:
+ * - \( w_i \) is the weight for the \( i \)-th gradient.
+ * - \( \alpha \) is a tuning parameter that controls how quickly the weights increase. A higher \(\alpha\) 
+ * results in weights approaching 1 more quickly, while a lower \(\alpha\) provides a more gradual increase.
+ * 
+ * The weighted second-order gradient sum is computed as:
+ * \f[
+ * \text{TotalWeightedSum} = \sum_{i=1}^{N} w_i \cdot g_i
+ * \f]
+ * Where:
+ * - \( N \) is the total number of gradients.
+ * - \( g_i \) is the second-order gradient at the \( i \)-th point.
+ * 
+ * ### Decisions:
+ * - We do not modify the RLS algorithm itself, as the instability is only significant during early iterations. 
+ * The weighting system ensures that the RLS can proceed as normal, while the summing process mitigates 
+ * the influence of early instability.
+ * 
+ * - The exponential weighting function is chosen for its flexibility. It allows fine-tuning via the \(\alpha\) parameter 
+ * to control the rate at which early gradients lose their influence.
+ * 
+ * - The weighting is applied only during the summation of second-order gradients to ensure that the RLS update mechanism 
+ * and state tracking are not affected.
+ * 
+ * ### Parameters:
+ * @param values Array of data points representing the phase angles.
+ * @param length The length of the data array.
+ * @param start_index The starting index from which to begin calculating the second-order gradients.
+ * @param forgetting_factor The forgetting factor used in the RLS algorithm to give more weight to recent data.
+ * @return The weighted total sum of second-order gradients. Returns `NAN` if there are insufficient data points.
  */
-double compute_total_second_order_gradient(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, double forgetting_factor) {
+double compute_total_second_order_gradient(
+    const MqsRawDataPoint_t *values,
+    uint16_t length,
+    uint16_t start_index,
+    double forgetting_factor
+) {
     // Ensure that the start index and the length allow for RLS_WINDOW calculations
     if (start_index + RLS_WINDOW > length) {
         printf("Insufficient data to compute %d second-order gradients from the starting index.\n", RLS_WINDOW);
@@ -392,8 +548,10 @@ double compute_total_second_order_gradient(const MqsRawDataPoint_t *values, uint
     RunningQuadraticGradient rg;
     init_running_quadratic_gradient(&rg, forgetting_factor);
 
-    double total_sum_gradients = 0.0; // Initialize total sum of gradients
-   
+    double total_weighted_sum_gradients = 0.0; // Initialize total weighted sum of gradients
+    uint16_t stabilization_threshold = 3;      // Minimum number of points for valid gradient calculation
+    double alpha = 0.1;                        // Tuning parameter for the weight function, adjust as needed
+
     // Loop through the next RLS_WINDOW values starting from start_index
     for (uint16_t i = 0; i < RLS_WINDOW; ++i) {
         const MqsRawDataPoint_t *current_value = &values[start_index + i];
@@ -401,33 +559,31 @@ double compute_total_second_order_gradient(const MqsRawDataPoint_t *values, uint
         // Add the current value's phaseAngle to the running quadratic gradient
         add_quadratic_data_point(&rg, current_value);
 
-        // Calculate the second-order gradient only if we have at least 3 data points
-        if (rg.num_points >= 3) {
+        // Calculate the second-order gradient only if we have at least the stabilization threshold points
+        if (rg.num_points >= stabilization_threshold) {
             double second_order_gradient = calculate_second_order_gradient(&rg);
 
-            // Accumulate the total sum of gradients
-            total_sum_gradients += second_order_gradient;
+            // Calculate the weight for this gradient
+            uint16_t weight_index = rg.num_points - stabilization_threshold + 1;
+            double weight = 1.0 - exp(-alpha * weight_index);
 
-            // Optionally store the gradient in scratch space (if needed elsewhere in the function)
-            //second_order_gradients[i] = second_order_gradient;
+            // Accumulate the weighted sum of gradients
+            total_weighted_sum_gradients += weight * second_order_gradient;
 
-            // Optionally, print the total sum of gradients as it is adding new values
-            //printf("Total sum of gradients after adding phase angle %.6f: %.6f\n", current_value->phaseAngle, total_sum_gradients);
-
-            // Optionally, print the current second-order gradient
-            //printf("Second-order gradient after adding phase angle %.6f: %.6f\n", current_value->phaseAngle, second_order_gradient);
+            // Optionally, print the weight and the weighted gradient
+            // printf("Second-order gradient: %.6f, Weight: %.6f, Weighted Gradient: %.6f\n",
+            //        second_order_gradient, weight, weight * second_order_gradient);
         } else {
-            // Optionally, handle the case when not enough data points are available
-            //second_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
-
-            // Optionally, print a message indicating insufficient data
-            //printf("Not enough data points to calculate the gradient after adding phase angle %.6f.\n", current_value->phaseAngle);
+            // Handle the case when not enough data points are available for stable gradient calculation
+            // printf("Not enough data points to calculate a stable gradient after adding phase angle %.6f.\n",
+            //        current_value->phaseAngle);
         }
     }
 
-    // Return the total sum of the second-order gradients
-    return total_sum_gradients;
+    // Return the total weighted sum of the second-order gradients
+    return total_weighted_sum_gradients;
 }
+
 
 /**
  * @brief Finds a consistent increasing trend in the second-order gradient array.

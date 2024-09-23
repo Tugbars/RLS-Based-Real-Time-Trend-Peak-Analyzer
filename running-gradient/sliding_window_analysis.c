@@ -23,13 +23,14 @@
 typedef union {
     uint8_t value; /**< The combined value of all status flags. */
     struct {
-        uint8_t isPeakFound : 1;        /**< Flag indicating if a peak is found. */
-        uint8_t isUndecided : 1;        /**< Flag indicating if the analysis is undecided. */
-        uint8_t isCentered : 1;         /**< Flag indicating if the peak is centered. */
-        uint8_t isSweepRequested : 1;   /**< Flag indicating if a sweep is requested. */
-        uint8_t isSweepDone : 1;        /**< Flag indicating if the sweep is done. */
-        uint8_t isNotCentered : 1;      /**< Flag indicating if the peak is still not centered. */
-        uint8_t reserved : 2;           /**< Reserved bits for future use. */
+        uint8_t isPeakFound : 1;            /**< Flag indicating if a peak is found. */
+        uint8_t isUndecided : 1;            /**< Flag indicating if the analysis is undecided. */
+        uint8_t isCentered : 1;             /**< Flag indicating if the peak is centered. */
+        uint8_t isSweepRequested : 1;       /**< Flag indicating if a sweep is requested. */
+        uint8_t isSweepDone : 1;            /**< Flag indicating if the sweep is done. */
+        uint8_t isNotCentered : 1;          /**< Flag indicating if the peak is still not centered. */
+        uint8_t isVerificationFailed : 1;   /**< Flag indicating if peak verification failed. */
+        uint8_t reserved : 1;               /**< Reserved bit for future use. */
     };
 } SwpStatus_t;
 
@@ -53,7 +54,7 @@ static void OnEntryUpdateBufferDirection(void);
 static void OnEntryUndecidedTrendCase(void);
 static void OnEntryPeakFindingAnalysis(void);
 static void OnEntryWaiting(void);
-
+static void OnEntryPeakTruncationHandling(void);
 static void OnEntryPeakCentering(void);
 
 static void OnExitInitialAnalysis(void);
@@ -63,6 +64,7 @@ static void OnExitUndecidedTrendCase(void);
 static void OnExitPeakFindingAnalysis(void);
 static void OnExitWaiting(void);
 static void OnExitPeakCentering(void);
+static void OnExitPeakTruncationHandling(void);
 
 void SwpProcessStateChange(void);
 static void initBufferManager(MqsRawDataPoint_t* dataBuffer);
@@ -94,6 +96,7 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
     {OnEntryUndecidedTrendCase, OnExitUndecidedTrendCase, false},   // SWP_UNDECIDED_TREND_CASE
     {OnEntryPeakCentering, OnExitPeakCentering, false},             // SWP_PEAK_CENTERING
     {OnEntryPeakFindingAnalysis, OnExitPeakFindingAnalysis, false}, // SWP_PEAK_FINDING_ANALYSIS
+    {OnEntryPeakTruncationHandling, OnExitPeakTruncationHandling, false}, // SWP_PEAK_TRUNCATION_HANDLING
     {OnEntryWaiting, OnExitWaiting, false}                          // SWP_WAITING
 };
 /******************************************************************************/
@@ -116,7 +119,7 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 209;
+    int start_index = 207;
     init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);
 
     // Debugging: Print initialization state
@@ -139,13 +142,15 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     ctx.phaseAngles = phaseAngles;
     ctx.phase_angle_size = phase_angle_size;
     ctx.callback = callback;
+    ctx.isTruncatedLeft = false;
+    ctx.isTruncatedRight = false;
 
     // Initialize the buffer manager
     initBufferManager(sweep->data);
     
     	// detect_significant_gradient_trends, determine_trend_direction
 	init_cubic_rls_analysis_parameters(                                                                                                        //CHECKS IF THERE IS A PEAK VIA COUNTING/SUMMING CONSISTENT GRADIENT INCREASES 
-        10.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     
+        12.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     
                // Trends with a sum of gradients above this threshold are considered significant.
         5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.                     
                // Ensures that only sustained trends are analyzed.
@@ -360,7 +365,7 @@ static void OnEntryPeakCentering(void) {
         buffer_manager.buffer,
         buffer_manager.buffer_size,
         start_index,
-        0.5 // Forgetting factor
+        0.2 // Forgetting factor
     );
 
     printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
@@ -429,7 +434,7 @@ static void OnEntryPeakCentering(void) {
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
             } else {
                 // Use move_window_and_update_if_needed to shift the window and update if necessary
-                move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);  // Move window by 5 positions
+                move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);  
                 currentStatus.isCentered = 1;  // Peak is considered centered after window move
 
                 // The state machine will re-enter this state to check again
@@ -497,7 +502,7 @@ static void OnEntryPeakFindingAnalysis(void) {
         buffer_manager.buffer,
         buffer_manager.buffer_size,
         buffer_manager.current_buffer_index,
-        0.5 // Forgetting factor
+        0.2 // Forgetting factor
     );
     
     printf("Total sum of second-order gradients during peak verification: %.6f\n", total_gradient_sum);
@@ -517,34 +522,118 @@ static void OnEntryPeakFindingAnalysis(void) {
             0.5 // Forgetting factor
         );
 
-        // Handle truncations and move the window accordingly
-        bool peak_verified_after_truncation = verification_result.peak_found;
-
-        if (verification_result.is_truncated_left) {
+        // Set truncation flags based on the verification result
+      if (verification_result.is_truncated_left || verification_result.is_truncated_right) {
+            if (verification_result.is_truncated_left) {
             printf("Peak verification truncated on the left side.\n");
-            move_window_and_update_if_needed(ctx.phaseAngles, LEFT_SIDE, 5);  // Move the window 5 positions left
-            peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);  // Re-verify the peak
-        }
-
-        if (verification_result.is_truncated_right) {
+            ctx.isTruncatedLeft = true;
+            }
+            if (verification_result.is_truncated_right) {
             printf("Peak verification truncated on the right side.\n");
-            move_window_and_update_if_needed(ctx.phaseAngles, RIGHT_SIDE, 5);  // Move the window 5 positions right
-            peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);  // Re-verify the peak
-        }
-
-        // Check if the peak is verified after adjustments (post-truncation)
-        if (peak_verified_after_truncation) {
-            printf("Peak verification successful, peak is centered.\n");
-            print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
-            currentStatus.isSweepDone = 1;  // Mark the sweep as done
+            ctx.isTruncatedRight = true;
+            }
         } else {
-            printf("Peak verification failed, returning to peak centering.\n");
-            currentStatus.isNotCentered = 1;  // Set flag to indicate it's not centered
+            // Peak verification successful
+            if (verification_result.peak_found) {
+                printf("Peak verification successful, peak is centered.\n");
+                print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
+                currentStatus.isSweepDone = 1;  // Mark the sweep as done
+            } else {
+                printf("Peak verification failed, returning to peak centering.\n");
+                currentStatus.isNotCentered = 1;  // Set flag to indicate it's not centered
+            }
         }
     }
 
     // Mark the state as complete
     STATE_FUNCS[SWP_PEAK_FINDING_ANALYSIS].isComplete = true;
+    SwpProcessStateChange();  // Process the next state
+}
+
+/**
+ * @brief Entry function for the SWP_PEAK_TRUNCATION_HANDLING state.
+ *
+ * This function handles the scenario where peak verification during the peak finding analysis
+ * is incomplete due to data truncation on the left or right side of the data window.
+ * It adjusts the data window by moving it in the appropriate direction and attempts to
+ * re-verify the peak after the adjustment.
+ *
+ * ### Function Workflow:
+ * 1. **Initialization**:
+ *    - Initializes a flag `peak_verified_after_truncation` to track if the peak is verified
+ *      after handling truncation.
+ * 2. **Left Side Truncation Handling**:
+ *    - Checks if the peak verification was truncated on the left side (`ctx.isTruncatedLeft`).
+ *    - If so, it moves the data window to the left by a predefined amount (e.g., 5 positions)
+ *      using `move_window_and_update_if_needed`.
+ *    - Re-verifies the peak at the current buffer index by calling `verify_peak_at_index`.
+ *    - Resets the `isTruncatedLeft` flag in the context.
+ * 3. **Right Side Truncation Handling**:
+ *    - Checks if the peak verification was truncated on the right side (`ctx.isTruncatedRight`).
+ *    - If so, it moves the data window to the right by a predefined amount (e.g., 5 positions)
+ *      using `move_window_and_update_if_needed`.
+ *    - Re-verifies the peak at the current buffer index by calling `verify_peak_at_index`.
+ *    - Resets the `isTruncatedRight` flag in the context.
+ * 4. **Peak Verification Post-Truncation**:
+ *    - If the peak is successfully verified after adjustments, it marks the sweep as done
+ *      by setting `currentStatus.isSweepDone`.
+ *    - If the peak verification fails after adjustments, it sets `currentStatus.isVerificationFailed`
+ *      to indicate that the peak verification failed, prompting a return to peak finding analysis.
+ * 5. **State Transition**:
+ *    - Marks the current state as complete (`isComplete = true`).
+ *    - Calls `SwpProcessStateChange()` to transition to the next state based on the updated status flags.
+ *
+ * ### Related Functions:
+ * - **`find_and_verify_quadratic_peak`**:
+ *   - Detects and verifies peaks using second-order gradients from quadratic regression.
+ *   - Returns a `QuadraticPeakAnalysisResult` containing peak verification status and truncation flags.
+ * - **`verify_quadratic_peak`**:
+ *   - Verifies a detected peak by checking for consistent increasing trends on the left side and
+ *     decreasing trends on the right side of the peak.
+ *   - Considers truncation scenarios if the data window does not fully encompass the required trends.
+ *
+ * ### Notes:
+ * - The function relies on the context (`ctx`) to check for truncation flags (`isTruncatedLeft`, `isTruncatedRight`)
+ *   and to reset them after handling.
+ * - The function modifies `currentStatus` to communicate the result of the truncation handling to the state machine.
+ * - The data window adjustments are crucial for ensuring that the peak is fully captured within the analysis window,
+ *   which is essential for accurate peak verification.
+ *
+ * @see find_and_verify_quadratic_peak
+ * @see verify_quadratic_peak
+ * @see move_window_and_update_if_needed
+ * @see SwpProcessStateChange
+ */
+static void OnEntryPeakTruncationHandling(void) {
+    bool peak_verified_after_truncation = false;
+
+    if (ctx.isTruncatedLeft) {
+        printf("Handling truncation on the left side.\n");
+        move_window_and_update_if_needed(ctx.phaseAngles, LEFT_SIDE, 5);
+        peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
+        ctx.isTruncatedLeft = false;  // Reset flag
+    }
+
+    if (ctx.isTruncatedRight) {
+        printf("Handling truncation on the right side.\n");
+        move_window_and_update_if_needed(ctx.phaseAngles, RIGHT_SIDE, 5);
+        peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
+        ctx.isTruncatedRight = false;  // Reset flag
+    }
+
+    // Check if the peak is verified after adjustments (post-truncation)
+    if (peak_verified_after_truncation) {
+        printf("Peak verification successful after truncation handling, peak is centered.\n");
+        print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
+        currentStatus.isSweepDone = 1;  // Mark the sweep as done
+    } else {
+        // If peak is not verified, go back to peak finding analysis
+        printf("Peak verification failed after truncation handling, returning to peak finding analysis.\n");
+        currentStatus.isVerificationFailed = 1;  // Set flag to indicate verification failed
+    }
+
+    // Mark the state as complete
+    STATE_FUNCS[SWP_PEAK_TRUNCATION_HANDLING].isComplete = true;
     SwpProcessStateChange();  // Process the next state
 }
 
@@ -590,6 +679,11 @@ static void OnExitWaiting(void) {
 
 static void OnExitPeakCentering(void) {
     //printf("Exiting SWP_PEAK_CENTERING state.\n");
+}
+
+static void OnExitPeakTruncationHandling(void) {
+    // Any cleanup code can go here
+    // For now, we'll leave it empty
 }
 
 /******************************************************************************/
@@ -693,13 +787,26 @@ static SwpState_t NextState(SwpState_t state) {
             return SWP_SEGMENT_ANALYSIS;
 
         case SWP_PEAK_FINDING_ANALYSIS:
+            if (ctx.isTruncatedLeft || ctx.isTruncatedRight) {
+                return SWP_PEAK_TRUNCATION_HANDLING;
+            }
             if (currentStatus.isNotCentered) {
-                return SWP_PEAK_CENTERING;  // Go back to peak centering if not centered
+                return SWP_PEAK_CENTERING;
             }
             if (currentStatus.isSweepDone) {
                 return SWP_WAITING;
             }
             return SWP_PEAK_FINDING_ANALYSIS;
+
+        case SWP_PEAK_TRUNCATION_HANDLING:
+            if (currentStatus.isSweepDone) {
+                return SWP_WAITING;
+            }
+            if (currentStatus.isVerificationFailed) {
+                return SWP_PEAK_FINDING_ANALYSIS;
+            }
+            // Remain in truncation handling if no flags are set
+            return SWP_PEAK_TRUNCATION_HANDLING;
 
         case SWP_WAITING:
             if (currentStatus.isSweepRequested) {
@@ -711,4 +818,5 @@ static SwpState_t NextState(SwpState_t state) {
             return SWP_WAITING;
     }
 }
+
 

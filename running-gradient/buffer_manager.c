@@ -123,7 +123,7 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
  * @param phase_index_start The starting index of the phase angles to update from.
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
  */
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index) { //MESADDRAWDATAPOINT
+void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index) { //  MesSweepAddDataPoint(currentRawSweep, real, imaginary); ile aynı olmalı.
     // Loop to update the buffer with new phaseAngle values
     for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
         int16_t phase_index = phase_index_start + i;
