@@ -213,21 +213,20 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
  * This function loads the initial buffer with phase angle data and sets the sweep request flag.
  */
 static void OnEntryInitialAnalysis(void) {
-    //printf("→→→→→Entering SWP_INITIAL_ANALYSIS state.\n");
+    // Set up buffer update info instead of directly loading the buffer
+    buffer_update_info.needs_update = true;
+    buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
+    buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
+    buffer_update_info.move_amount = buffer_manager.window_size;
 
-    load_initial_buffer(ctx.phaseAngles, ctx.phase_angle_size);
-    
-      // Debugging buffer state after load
-    //printf("[DEBUG] Buffer Manager State after initial loading:\n");
-    //printf("Current buffer index: %d\n", buffer_manager.current_buffer_index);
-    //printf("Current phase index: %d\n", buffer_manager.current_phase_index);
-    //printf("Window size: %d\n", buffer_manager.window_size);
-    //printf("Buffer size: %d\n", buffer_manager.buffer_size);
     currentStatus.isSweepRequested = true;
     STATE_FUNCS[SWP_INITIAL_ANALYSIS].isComplete = true;
+
+    // After setting up, we can perform the buffer update
+    perform_buffer_update_if_needed(ctx.phaseAngles);
+
     SwpProcessStateChange();  // Move to next state
 }
-
 
 /**
  * @brief Entry function for the SWP_SEGMENT_ANALYSIS state.
@@ -235,8 +234,6 @@ static void OnEntryInitialAnalysis(void) {
  * This function performs segment analysis on the current window of data to determine the direction of movement.
  */
 static void OnEntrySegmentAnalysis(void) {
-    //printf("→→→→→Entering SWP_SEGMENT_ANALYSIS state.\n");
-    
     float forgetting_factor = 0.5f;
 
     SegmentAnalysisResult result = segment_trend_and_concavity_analysis(
@@ -263,8 +260,11 @@ static void OnEntrySegmentAnalysis(void) {
  * This function updates the buffer based on the determined direction from the segment analysis.
  */
 static void OnEntryUpdateBufferDirection(void) {
-    // Pass the movement amount as an argument
+    // Set up buffer update info
     update_buffer_for_direction(ctx.phaseAngles, ctx.direction, buffer_manager.window_size / 2);
+
+    // After setting up, perform the buffer update if needed
+    perform_buffer_update_if_needed(ctx.phaseAngles);
 
     STATE_FUNCS[SWP_UPDATE_BUFFER_DIRECTION].isComplete = true;
     SwpProcessStateChange();  // Move to next state
@@ -275,10 +275,11 @@ static void OnEntryUpdateBufferDirection(void) {
  *
  * This function handles the case when the segment analysis result is undecided by moving the window forward.
  */
-static void OnEntryUndecidedTrendCase(void) {  //ÜZERİNE YAZIYOR.
-    //printf("→→→→→→Entering SWP_UNDECIDED_TREND_CASE state.\n");
-
+static void OnEntryUndecidedTrendCase(void) {
     handle_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);
+
+    // After setting up, perform the buffer update if needed
+    perform_buffer_update_if_needed(ctx.phaseAngles);
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
@@ -350,9 +351,9 @@ static void OnEntryUndecidedTrendCase(void) {  //ÜZERİNE YAZIYOR.
  * @see SwpProcessStateChange
  */
 static void OnEntryPeakCentering(void) {
-    // Reset the isComplete flag
+    // Reset the isComplete flag for this state
     STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = false;
-    
+
     // Reset the isNotCentered flag
     currentStatus.isNotCentered = 0;
 
@@ -370,16 +371,17 @@ static void OnEntryPeakCentering(void) {
 
     printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
 
-    // If total_gradient_sum <= centered_gradient_sum, consider the peak centered
+    // Check if the peak is centered based on the total gradient sum
     if (total_gradient_sum <= quadratic_analysis_params.centered_gradient_sum &&
-        total_gradient_sum > -quadratic_analysis_params.centered_gradient_sum) {
+        total_gradient_sum >= -quadratic_analysis_params.centered_gradient_sum) {
+
         currentStatus.isCentered = 1;
         printf("Peak is centered based on total_gradient_sum.\n");
         STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
 
     } else {
-        // Else, we need to adjust the buffer to center the peak
-        // Use track_gradient_trends_with_quadratic_regression to get trend info
+        // Need to adjust the buffer to center the peak
+        // Obtain gradient trends
         GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
             buffer_manager.buffer,
             buffer_manager.buffer_size,
@@ -388,56 +390,60 @@ static void OnEntryPeakCentering(void) {
             0.5 // Forgetting factor
         );
 
-        // Check if both trends are valid
+        // Check if both increasing and decreasing trends are valid
         if (!gradient_trends.increase_info.valid || !gradient_trends.decrease_info.valid) {
             printf("Invalid trend data. Cannot proceed with centering.\n");
-            currentStatus.isCentered = 1; // Consider it centered for now
+            currentStatus.isCentered = 1; // Consider it centered for now to prevent infinite loops
             STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
         } else {
-            // Calculate durations of increase and decrease trends
+            // Calculate durations of increasing and decreasing trends
             uint16_t increase_start = gradient_trends.increase_info.start_index;
             uint16_t increase_end = gradient_trends.increase_info.end_index;
             uint16_t decrease_start = gradient_trends.decrease_info.start_index;
             uint16_t decrease_end = gradient_trends.decrease_info.end_index;
 
-            // Adjust indices relative to the buffer
+            // Adjust indices relative to the buffer size to handle wrap-around
             uint16_t increase_duration = (increase_end + buffer_manager.buffer_size - increase_start) % buffer_manager.buffer_size;
             uint16_t decrease_duration = (decrease_end + buffer_manager.buffer_size - decrease_start) % buffer_manager.buffer_size;
 
             int shift_amount = 0;
-            int direction = UNDECIDED; // LEFT_SIDE or RIGHT_SIDE
+            int direction = UNDECIDED; // Initialize direction
 
             if (increase_duration > decrease_duration) {
-                // Peak is to the left; we need to move right
+                // Peak is to the left; shift window to the right
                 shift_amount = (increase_duration - decrease_duration) + 1;
                 direction = RIGHT_SIDE;
                 printf("Increase duration (%u) > decrease duration (%u). Moving right by %d.\n",
                        increase_duration, decrease_duration, shift_amount);
-                       
+
             } else if (decrease_duration > increase_duration) {
-                // Peak is to the right; we need to move left
+                // Peak is to the right; shift window to the left
                 shift_amount = (decrease_duration - increase_duration) + 1;
                 direction = LEFT_SIDE;
                 printf("Decrease duration (%u) > increase duration (%u). Moving left by %d.\n",
                        decrease_duration, increase_duration, shift_amount);
             } else {
-                // Durations are equal; consider the peak centered
+                // Durations are equal; peak is centered
                 currentStatus.isCentered = 1;
                 printf("Increase and decrease durations are equal. Peak is centered.\n");
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
             }
 
             if (shift_amount == 0) {
-                // No need to shift
+                // No need to shift; peak is centered
                 currentStatus.isCentered = 1;
                 printf("No shift needed. Peak is centered.\n");
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
             } else {
-                // Use move_window_and_update_if_needed to shift the window and update if necessary
-                move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);  
-                currentStatus.isCentered = 1;  // Peak is considered centered after window move
+                // Move the window and set up buffer update if necessary
+                move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);
 
-                // The state machine will re-enter this state to check again
+                // After moving the window, perform buffer update if needed
+                perform_buffer_update_if_needed(ctx.phaseAngles);
+
+                currentStatus.isCentered = 1;
+
+                // The state will re-enter to check centering again
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
             }
         }
@@ -448,6 +454,7 @@ static void OnEntryPeakCentering(void) {
         SwpProcessStateChange();
     }
 }
+
 
 /**
  * @brief Entry function for the SWP_PEAK_FINDING_ANALYSIS state.
@@ -610,6 +617,10 @@ static void OnEntryPeakTruncationHandling(void) {
     if (ctx.isTruncatedLeft) {
         printf("Handling truncation on the left side.\n");
         move_window_and_update_if_needed(ctx.phaseAngles, LEFT_SIDE, 5);
+
+        // Perform buffer update if needed
+        perform_buffer_update_if_needed(ctx.phaseAngles);
+
         peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
         ctx.isTruncatedLeft = false;  // Reset flag
     }
@@ -617,10 +628,14 @@ static void OnEntryPeakTruncationHandling(void) {
     if (ctx.isTruncatedRight) {
         printf("Handling truncation on the right side.\n");
         move_window_and_update_if_needed(ctx.phaseAngles, RIGHT_SIDE, 5);
+
+        // Perform buffer update if needed
+        perform_buffer_update_if_needed(ctx.phaseAngles);
+
         peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
         ctx.isTruncatedRight = false;  // Reset flag
     }
-
+    
     // Check if the peak is verified after adjustments (post-truncation)
     if (peak_verified_after_truncation) {
         printf("Peak verification successful after truncation handling, peak is centered.\n");
@@ -779,6 +794,7 @@ static SwpState_t NextState(SwpState_t state) {
             } else {
                 return SWP_PEAK_CENTERING;
             }
+        return SWP_PEAK_CENTERING;
 
         case SWP_UPDATE_BUFFER_DIRECTION:
             return SWP_SEGMENT_ANALYSIS;

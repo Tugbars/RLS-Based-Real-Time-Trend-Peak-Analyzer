@@ -22,6 +22,20 @@ extern int analysis_start_index;  // Track the initial start index
 extern int analysis_end_index;    // Track the final end index
 
 /**
+ * @struct BufferUpdateInfo
+ * @brief Structure to hold buffer update information.
+ */
+typedef struct {
+    bool needs_update;
+    int16_t phase_index_start;
+    int16_t buffer_start_index;
+    uint16_t move_amount;
+} BufferUpdateInfo;
+
+/** @brief Extern declaration of buffer_update_info for use across different files. */
+extern BufferUpdateInfo buffer_update_info;
+
+/**
  * @struct BufferManager
  * @brief Structure to manage the buffer and indices for sliding window analysis.
  *
@@ -77,11 +91,7 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size);
  * @param phase_index_start  The starting index of the phase angles to update from.
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
  */
-void update_phaseAngle_to_buffer(
-    const double* phaseAngles,
-    int16_t phase_index_start,
-    int16_t buffer_start_index
-);
+void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
 
 /**
  * @brief Updates the buffer to shift the analysis window in a specified direction.
@@ -101,6 +111,8 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
 void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
 
 void move_window_and_update_if_needed(const double* phaseAngles, int direction, int move_amount);
+
+void perform_buffer_update_if_needed(const double* phaseAngles);
 
 void print_analysis_interval(const double* phaseAngles, int total_size);
 
