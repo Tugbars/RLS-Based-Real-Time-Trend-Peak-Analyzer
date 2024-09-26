@@ -33,7 +33,7 @@ int main() {
 
     PrepareBaseSweep(&rawBaseSweep, rawData); 
     currentRawSweep = &rawBaseSweep;
-    startSlidingWindowAnalysis(currentRawSweep, phaseAngles, size, myCallbackFunction); //AKTIVE EDILMESI LAZIM. 
+    startSlidingWindowAnalysis(currentRawSweep, phaseAngles, size, myCallbackFunction); 
     
 	return 0;
 }

@@ -102,6 +102,8 @@ void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_
  */
 void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount);
 
+void handle_negative_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
+
 /**
  * @brief Handles the case when the segment analysis result is undecided.
  *

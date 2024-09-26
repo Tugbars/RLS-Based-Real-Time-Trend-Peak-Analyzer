@@ -7,6 +7,7 @@
 #include "windowed_running_gradient.h"
 #include "running_quadratic_gradient.h"
 #include "rls_analysis_parameters.h"
+#include "buffer_manager.h"
 
 /**
  * @brief Structure to store running gradient data for a quadratic model.
@@ -470,9 +471,17 @@ QuadraticPeakAnalysisResult find_and_verify_quadratic_peak(const MqsRawDataPoint
             }
         }
     }
+    
 
     if (!result.peak_found) {
         printf("No verified peak found in the specified window.\n");
+    }else{
+        // Adjust the peak index to match the real phaseAngle array
+        uint16_t real_peak_index = buffer_manager.current_phase_index + (result.peak_index);
+
+        // Print the real peak index in the phaseAngle array
+        printf("[verify_peak_at_index] Verified peak found at real phaseAngle index: %d\n", real_peak_index);
+
     }
 
     return result;
@@ -796,7 +805,7 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
 GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     GradientTrendResult trend_result = {0};  // Initialize the struct with default values
     
-    printf("-- -track_gradient_trends_with_quadratic_regression called with arguments:\n");
+    //printf("-- -track_gradient_trends_with_quadratic_regression called with arguments:\n");
     //printf("  length: %u\n", length);
     //printf("  start_index: %u\n", start_index);
     //printf("  window_size: %u\n", window_size);

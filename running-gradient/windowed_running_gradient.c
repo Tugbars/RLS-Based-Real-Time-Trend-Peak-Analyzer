@@ -345,8 +345,6 @@ double calculate_probability(RunningGradient *rg) {
     return 0.49;  // Default probability if not enough points
 }
 
-//#define DEBUG_LINEAR_GRADIENT
-
 /**
  * @brief Processes the gradient for a part of the window (left or right).
  *
@@ -381,34 +379,39 @@ void process_gradient(RunningGradient *rg, const MqsRawDataPoint_t *data, uint16
  *
  * This function evaluates the total gradients and increase counts for both parts of the window (left and right)
  * to determine which side has the stronger trend, either increasing or decreasing. If both sides have gradients
- * that do not meet the minimum threshold, the result will be set as UNDECIDED.
+ * that do not meet the minimum threshold, the result will be set as UNDECIDED. Additionally, if both gradients 
+ * are negative and the difference in their absolute values is less than the minimum threshold, the result is 
+ * set to NEGATIVE_UNDECIDED.
  *
  * @param result Pointer to the GradientComparisonResult structure containing the gradient comparison data.
- * @return PeakPosition indicating whether the left side, right side, or neither side (undecided) has a dominant trend.
+ * @return PeakPosition indicating whether the left side, right side, neither side (undecided), or both sides 
+ *         (negative undecided) have a dominant trend.
  */
 PeakPosition determine_dominant_side(const GradientComparisonResult *result) {
     double min_total = gradient_analysis_params.minimum_gradient_total;
-
-    // Check if both gradients are insignificant
+    double threshold = 0.1;  // Threshold for deciding right-side dominance based on total gradients
+    
+    // Check if both gradients are insignificant (close to zero)
     if ((result->total_gradient_first_part > -min_total && result->total_gradient_first_part < min_total) &&
         (result->total_gradient_second_part > -min_total && result->total_gradient_second_part < min_total)) {
         return UNDECIDED;  // Both sides have insignificant gradients
     }
 
-    // Check for dominant increase
-    if (result->increase_count_first_part > result->increase_count_second_part) {
-        return LEFT_SIDE;  // Left side has a stronger increase
-    }
-    if (result->increase_count_second_part > result->increase_count_first_part) {
-        return RIGHT_SIDE;  // Right side has a stronger increase
+    // Check for negative undecided case
+    if (result->total_gradient_first_part < 0 && result->total_gradient_second_part < 0 &&
+        fabs(result->total_gradient_first_part - result->total_gradient_second_part) < min_total) {
+        return NEGATIVE_UNDECIDED;  // Both sides have similar negative gradients
     }
 
-    // Check for decreases if no dominant increase
-    if (result->total_gradient_first_part < result->total_gradient_second_part) {
-        return RIGHT_SIDE;  // Right side has a stronger decrease
+    // Apply 0.2 threshold when comparing total gradients for right-side dominance
+    if (result->total_gradient_second_part > result->total_gradient_first_part &&
+        (result->total_gradient_second_part - result->total_gradient_first_part) > threshold) {
+        return RIGHT_SIDE;  // Right side is dominant only if the difference exceeds the threshold
     }
-    if (result->total_gradient_second_part < result->total_gradient_first_part) {
-        return LEFT_SIDE;   // Left side has a stronger decrease
+
+    // Check for left-side dominance (no threshold applied)
+    if (result->total_gradient_first_part > result->total_gradient_second_part) {
+        return LEFT_SIDE;   // Left side is dominant
     }
 
     return UNDECIDED;  // No clear dominant side
@@ -439,29 +442,32 @@ GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, u
     //printf("Processing the left side (first part) from %u to %u...\n", middle_index - (WINDOW_SIZE / 2), middle_index);
     process_gradient(&rg_left_part, data, middle_index - (WINDOW_SIZE / 2), middle_index, 
                      &result.total_gradient_first_part, &result.increase_count_first_part);
-    result.probability_increase_first_part = calculate_probability(&rg_left_part);
+    //result.probability_increase_first_part = calculate_probability(&rg_left_part);
 
     // Process the right side (second part)
     //printf("Processing the right side (second part) from %u to %u...\n", middle_index, middle_index + (WINDOW_SIZE / 2));
     process_gradient(&rg_right_part, data, middle_index, middle_index + (WINDOW_SIZE / 2), 
                      &result.total_gradient_second_part, &result.increase_count_second_part);
-    result.probability_increase_second_part = calculate_probability(&rg_right_part);
+    //result.probability_increase_second_part = calculate_probability(&rg_right_part);
 
     // Compare the results to determine the dominant side
     //printf("Comparing the results...\n");
     result.dominant_side = determine_dominant_side(&result);
 
     switch (result.dominant_side) {
-        case LEFT_SIDE:
-            printf("The left side has a stronger trend.\n");
-            break;
-        case RIGHT_SIDE:
-            printf("The right side has a stronger trend.\n");
-            break;
-        case UNDECIDED:
-        default:
-            printf("The trend is undecided or similar on both sides.\n");
-            break;
+    case LEFT_SIDE:
+        printf("The left side has a stronger trend.\n");
+        break;
+    case RIGHT_SIDE:
+        printf("The right side has a stronger trend.\n");
+        break;
+    case NEGATIVE_UNDECIDED:
+        printf("Both sides have negative trends with no significant difference.\n");
+        break;
+    case UNDECIDED:
+    default:
+        printf("The trend is undecided or similar on both sides.\n");
+        break;
     }
 
     return result;

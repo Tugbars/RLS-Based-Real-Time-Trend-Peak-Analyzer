@@ -1,4 +1,4 @@
-#include "sliding_window_analysis.h"
+    #include "sliding_window_analysis.h"
 #include <stdio.h>
 
 /**
@@ -119,7 +119,7 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 207;
+    int start_index = 78;
     init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);
 
     // Debugging: Print initialization state
@@ -223,9 +223,7 @@ static void OnEntryInitialAnalysis(void) {
     STATE_FUNCS[SWP_INITIAL_ANALYSIS].isComplete = true;
 
     // After setting up, we can perform the buffer update
-    perform_buffer_update_if_needed(ctx.phaseAngles);
-
-    SwpProcessStateChange();  // Move to next state
+    SweepSampleCb(ctx.phaseAngles);
 }
 
 /**
@@ -233,7 +231,7 @@ static void OnEntryInitialAnalysis(void) {
  *
  * This function performs segment analysis on the current window of data to determine the direction of movement.
  */
-static void OnEntrySegmentAnalysis(void) {
+static void OnEntrySegmentAnalysis(void) {                                                                                                                 // yok 
     float forgetting_factor = 0.5f;
 
     SegmentAnalysisResult result = segment_trend_and_concavity_analysis(
@@ -243,11 +241,10 @@ static void OnEntrySegmentAnalysis(void) {
     );
 
     ctx.direction = result.nextDirection;
-
     if (ctx.direction == ON_PEAK) {
         currentStatus.isPeakFound = 1;
-    } else if (ctx.direction == UNDECIDED) {
-        currentStatus.isUndecided = 1;
+    } else if (ctx.direction == UNDECIDED || ctx.direction == NEGATIVE_UNDECIDED) {
+        currentStatus.isUndecided = 1;  // Raise undecided flag for both cases
     }
 
     STATE_FUNCS[SWP_SEGMENT_ANALYSIS].isComplete = true;
@@ -264,7 +261,7 @@ static void OnEntryUpdateBufferDirection(void) {
     update_buffer_for_direction(ctx.phaseAngles, ctx.direction, buffer_manager.window_size / 2);
 
     // After setting up, perform the buffer update if needed
-    perform_buffer_update_if_needed(ctx.phaseAngles);
+    SweepSampleCb(ctx.phaseAngles);                                                                                                 //VAR
 
     STATE_FUNCS[SWP_UPDATE_BUFFER_DIRECTION].isComplete = true;
     SwpProcessStateChange();  // Move to next state
@@ -274,12 +271,17 @@ static void OnEntryUpdateBufferDirection(void) {
  * @brief Entry function for the SWP_UNDECIDED_TREND_CASE state.
  *
  * This function handles the case when the segment analysis result is undecided by moving the window forward.
+ * If it's a negative undecided case, it moves the window backward instead.
  */
 static void OnEntryUndecidedTrendCase(void) {
-    handle_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);
+    if (ctx.direction == NEGATIVE_UNDECIDED) {
+        handle_negative_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);  // Move the window backward
+    } else {
+        handle_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);  // Move the window forward
+    }
 
     // After setting up, perform the buffer update if needed
-    perform_buffer_update_if_needed(ctx.phaseAngles);
+    SweepSampleCb(ctx.phaseAngles);                                                                                                   //VAR
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
@@ -350,7 +352,7 @@ static void OnEntryUndecidedTrendCase(void) {
  * @see update_buffer_for_direction
  * @see SwpProcessStateChange
  */
-static void OnEntryPeakCentering(void) {
+static void OnEntryPeakCentering(void) {  
     // Reset the isComplete flag for this state
     STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = false;
 
@@ -366,7 +368,7 @@ static void OnEntryPeakCentering(void) {
         buffer_manager.buffer,
         buffer_manager.buffer_size,
         start_index,
-        0.2 // Forgetting factor
+        0.7 // NOTE: MAKE IT AS BIG AS POSSIBLE TO BE ABLE TO CENTER THE PEAK AS GOOD AS POSSIBLE. 
     );
 
     printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
@@ -434,24 +436,25 @@ static void OnEntryPeakCentering(void) {
                 currentStatus.isCentered = 1;
                 printf("No shift needed. Peak is centered.\n");
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+        
+                // Proceed to next state
+                SwpProcessStateChange();
+
             } else {
                 // Move the window and set up buffer update if necessary
                 move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);
-
+        
                 // After moving the window, perform buffer update if needed
-                perform_buffer_update_if_needed(ctx.phaseAngles);
+                SweepSampleCb(ctx.phaseAngles);                                                                                                      //VAR
 
                 currentStatus.isCentered = 1;
 
                 // The state will re-enter to check centering again
                 STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+                
+                SwpProcessStateChange();
             }
         }
-    }
-
-    // The state machine will handle the transition based on the isComplete flag
-    if (STATE_FUNCS[SWP_PEAK_CENTERING].isComplete) {
-        SwpProcessStateChange();
     }
 }
 
@@ -502,14 +505,14 @@ static void OnEntryPeakCentering(void) {
  * @brief Entry function for the SWP_PEAK_FINDING_ANALYSIS state.
  *
  * This function verifies the peak at the current buffer index and handles truncation cases.
- */
-static void OnEntryPeakFindingAnalysis(void) {
+ */ 
+static void OnEntryPeakFindingAnalysis(void) {                                                                                                 // yok 
     // Print the total second-order gradient sum again to verify the peak
     double total_gradient_sum = compute_total_second_order_gradient(
         buffer_manager.buffer,
         buffer_manager.buffer_size,
         buffer_manager.current_buffer_index,
-        0.2 // Forgetting factor
+        0.5 // Forgetting factor
     );
     
     printf("Total sum of second-order gradients during peak verification: %.6f\n", total_gradient_sum);
@@ -543,7 +546,7 @@ static void OnEntryPeakFindingAnalysis(void) {
             // Peak verification successful
             if (verification_result.peak_found) {
                 printf("Peak verification successful, peak is centered.\n");
-                print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
+                print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval    
                 currentStatus.isSweepDone = 1;  // Mark the sweep as done
             } else {
                 printf("Peak verification failed, returning to peak centering.\n");
@@ -612,17 +615,16 @@ static void OnEntryPeakFindingAnalysis(void) {
  * @see SwpProcessStateChange
  */
 static void OnEntryPeakTruncationHandling(void) {
-    bool peak_verified_after_truncation = false;
+    // Since this state may involve multiple transitions based on truncation handling, 
+    // we keep isComplete = false initially
+    STATE_FUNCS[SWP_PEAK_TRUNCATION_HANDLING].isComplete = false; 
 
     if (ctx.isTruncatedLeft) {
         printf("Handling truncation on the left side.\n");
         move_window_and_update_if_needed(ctx.phaseAngles, LEFT_SIDE, 5);
 
         // Perform buffer update if needed
-        perform_buffer_update_if_needed(ctx.phaseAngles);
-
-        peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
-        ctx.isTruncatedLeft = false;  // Reset flag
+        SweepSampleCb(ctx.phaseAngles);
     }
 
     if (ctx.isTruncatedRight) {
@@ -630,27 +632,12 @@ static void OnEntryPeakTruncationHandling(void) {
         move_window_and_update_if_needed(ctx.phaseAngles, RIGHT_SIDE, 5);
 
         // Perform buffer update if needed
-        perform_buffer_update_if_needed(ctx.phaseAngles);
-
-        peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
-        ctx.isTruncatedRight = false;  // Reset flag
-    }
-    
-    // Check if the peak is verified after adjustments (post-truncation)
-    if (peak_verified_after_truncation) {
-        printf("Peak verification successful after truncation handling, peak is centered.\n");
-        print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
-        currentStatus.isSweepDone = 1;  // Mark the sweep as done
-    } else {
-        // If peak is not verified, go back to peak finding analysis
-        printf("Peak verification failed after truncation handling, returning to peak finding analysis.\n");
-        currentStatus.isVerificationFailed = 1;  // Set flag to indicate verification failed
+        SweepSampleCb(ctx.phaseAngles);
     }
 
-    // Mark the state as complete
-    STATE_FUNCS[SWP_PEAK_TRUNCATION_HANDLING].isComplete = true;
-    SwpProcessStateChange();  // Process the next state
+    // Don't mark the state complete here since we will evaluate the outcome in OnExit
 }
+
 
 
 /**
@@ -696,9 +683,28 @@ static void OnExitPeakCentering(void) {
     //printf("Exiting SWP_PEAK_CENTERING state.\n");
 }
 
+/**
+ * @brief Exit function for the SWP_PEAK_TRUNCATION_HANDLING state.
+ *
+ * This function handles the peak verification after truncation and buffer update are done.
+ */
 static void OnExitPeakTruncationHandling(void) {
-    // Any cleanup code can go here
-    // For now, we'll leave it empty
+    // Verify if the peak was successfully centered after truncation
+    bool peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
+    if (peak_verified_after_truncation) {
+        printf("Peak verification successful after truncation handling, peak is centered.\n");
+        print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
+        currentStatus.isSweepDone = 1;  // Mark the sweep as done
+        // Now the state is ready to transition, mark it complete
+
+    } else {
+        // If peak is not verified, return to peak finding analysis
+        printf("Peak verification failed after truncation handling, returning to peak finding analysis.\n");
+        currentStatus.isVerificationFailed = 1;  // Set flag to indicate verification failed
+       
+    }
+    
+    STATE_FUNCS[SWP_PEAK_TRUNCATION_HANDLING].isComplete = true;
 }
 
 /******************************************************************************/
@@ -708,44 +714,131 @@ static void OnExitPeakTruncationHandling(void) {
 /**
  * @brief Processes state changes in the sliding window analysis state machine.
  *
- * This function manages transitions between states based on the current status flags and ensures that
- * the appropriate onEntry and onExit functions are called for each state.
+ * This function manages the state transitions in the sliding window analysis state machine.
+ * It ensures that the appropriate OnExit and OnEntry functions are called during state transitions.
+ * The state machine continues processing until no further state changes occur.
+ * 
+ * ### Structure and Purpose:
+ * - The function uses a loop to repeatedly check if a state transition is needed.
+ * - Each state is represented by a set of functions: `OnEntry`, `OnExit`, and a `isComplete` flag that indicates
+ *   whether the state has finished its processing.
+ * - State transitions are triggered based on the `NextState` function, which determines the appropriate state to move to
+ *   after completing the current one.
+ *
+ * ### Key Concepts:
+ * - **State Completion (`isComplete`)**: Each state has an `isComplete` flag to indicate whether the state's processing
+ *   is done. The state machine will only transition to the next state if this flag is set. If the state is not marked
+ *   as complete, the next state is often determined by the logic inside the `OnExit()` function of the current state,
+ *   allowing flexibility for more complex state transitions that are dependent on the exit logic of a state.
+ * 
+ * - **OnExit/OnEntry Functions**: 
+ *   - When a state is marked as incomplete (`!isComplete`), the `OnExit()` function (if defined) is called to handle
+ *     cleanup, and potentially dictate what the next state will be.
+ *   - Once a state transition is made, the `OnEntry()` function for the new state is invoked to initialize the new state's processing.
+ *
+ * - **State Transition (`NextState`)**: The `NextState()` function determines the next state to transition into
+ *   based on the current state and flags. This function, in combination with the `OnExit()` function, ensures the
+ *   correct state is selected, especially for states that require further processing or specific conditions before moving forward.
+ * 
+ * ### Intention:
+ * - The function aims to provide flexibility in state transitions by allowing states to either fully complete and move on
+ *   to the next state, or re-enter themselves if they require further processing, such as in asynchronous operations.
+ * - The `OnExit()` logic allows states to determine the appropriate next state during exit, particularly useful in scenarios
+ *   where a state's exit depends on external factors or complex logic.
+ * - The loop ensures the state machine processes transitions in sequence without breaking the flow, making it adaptable for real-time or multi-step operations.
+ * 
+ * ### Working Mechanism:
+ * 1. **State Completion Check**:
+ *    - If the current state is incomplete (`!STATE_FUNCS[currentState].isComplete`), the function calls the `OnExit()` function (if defined)
+ *      to handle cleanup and determine any next steps.
+ *    - The `NextState()` function is called to determine the next state, and `stateChanged` tracks if the state has changed.
+ *    - This allows a state to finalize any pending tasks in its `OnExit()` before transitioning to the next one.
+ * 
+ * 2. **State Transition**:
+ *    - After calling `OnExit()`, the `isComplete` flag for the new state is reset, and the `OnEntry()` function for the new state is invoked.
+ *    - The `currentStatus.value` is reset to ensure no status flags carry over to the next state.
+ * 
+ * 3. **Complete State Handling**:
+ *    - If a state is marked as complete (`STATE_FUNCS[currentState].isComplete`), the function checks for the next state and processes it.
+ *    - The loop continues processing state transitions until no more state changes occur.
+ * 
+ * 4. **Callback Handling**:
+ *    - If the state machine reaches the `SWP_WAITING` state and a callback is set (`ctx.callback`), the callback is executed and cleared.
+ * 
+ * ### Example Use Case:
+ * The function is suitable for scenarios where:
+ * - Some states need multiple passes to complete their processing (e.g., waiting for an asynchronous event).
+ * - Transitions between states depend on conditions evaluated during the `OnExit()` function.
+ * - A callback function is executed after the state machine reaches a specific terminal state (e.g., `SWP_WAITING`).
+ * 
+ * ### Flexibility:
+ * The function handles both synchronous and asynchronous transitions. States that require multiple iterations
+ * to complete can use the `OnExit()` logic to determine the next state dynamically. Meanwhile, states that do not
+ * require re-entry can transition immediately.
+ * 
+ * @note The state machine continues processing until no further state changes occur, ensuring all transitions are properly handled.
+ *
  */
 void SwpProcessStateChange(void) {
     bool stateChanged;
-    
+
     // The state machine should process until no further state changes occur
     do {
-        // Determine the next state from the current state
-        SwpState_t nextState = NextState(currentState);  
-        stateChanged = (nextState != currentState);
-
-        // Reset the current status flags before moving to the next state
-        currentStatus.value = 0x0;
-
-        if (stateChanged) {
-            //printf("[DEBUG] Transitioning from state %d to state %d\n", currentState, nextState);
-
-            // Exit the current state (if applicable)
+        // If the current state is incomplete, handle its exit
+        if (!STATE_FUNCS[currentState].isComplete) {
+            // Ensure this debug message is only printed during truncation handling or incomplete states
+         
+            // Execute OnExit if it's not complete
             if (STATE_FUNCS[currentState].onExit != NULL) {
                 STATE_FUNCS[currentState].onExit();
             }
 
-            // Move to the new state
-            currentState = nextState;
+            // Determine the next state after OnExit
+            SwpState_t nextState = NextState(currentState);
+            stateChanged = (nextState != currentState);
 
-            // Reset the completion flag for the new state
-            STATE_FUNCS[currentState].isComplete = false;
+            // Reset the currentStatus before transitioning
+            currentStatus.value = 0x0;
 
-            // Enter the new state
-            if (STATE_FUNCS[currentState].onEntry != NULL) {
-                STATE_FUNCS[currentState].onEntry();
+            if (stateChanged) {
+                
+                // Ensure the old state's completion flag is set to false
+                STATE_FUNCS[currentState].isComplete = false;
+                // Move to the new state
+                currentState = nextState;
+
+                STATE_FUNCS[currentState].isComplete = false;
+
+                // Call the new state's OnEntry function
+                if (STATE_FUNCS[currentState].onEntry != NULL) {
+                    STATE_FUNCS[currentState].onEntry();
+                }
             }
         }
 
-        // If the new state is complete, proceed to the next state
+        // Process the state if it is marked complete
         if (STATE_FUNCS[currentState].isComplete) {
-            printf("[DEBUG] State %d is complete. Proceeding to next state...\n", currentState);
+            //printf("[DEBUG] State %d is complete. Proceeding to next state...\n", currentState);
+
+            // Determine the next state
+            SwpState_t nextState = NextState(currentState);
+            stateChanged = (nextState != currentState);
+            
+            // Clear currentStatus flags
+            currentStatus.value = 0x0;
+
+            if (stateChanged) {
+                // Transition to the new state
+                currentState = nextState;
+
+                // Ensure the new state's completion flag is set to false
+                STATE_FUNCS[currentState].isComplete = false;
+
+                // Call the OnEntry function for the new state
+                if (STATE_FUNCS[currentState].onEntry != NULL) {
+                    STATE_FUNCS[currentState].onEntry();
+                }
+            }
         }
 
     } while (stateChanged && STATE_FUNCS[currentState].isComplete);
@@ -788,8 +881,8 @@ static SwpState_t NextState(SwpState_t state) {
             }
             return SWP_UPDATE_BUFFER_DIRECTION;
 
-        case SWP_PEAK_CENTERING:
-            if (currentStatus.isCentered) {
+        case SWP_PEAK_CENTERING:                           
+            if (currentStatus.isCentered) {             // IN EITHER  CASE IT IS GOING TO BE FLAGGED AS CENTERED. TODO: IMPROVE THIS NONSENSE. 
                 return SWP_PEAK_FINDING_ANALYSIS;
             } else {
                 return SWP_PEAK_CENTERING;
@@ -814,7 +907,7 @@ static SwpState_t NextState(SwpState_t state) {
             }
             return SWP_PEAK_FINDING_ANALYSIS;
 
-        case SWP_PEAK_TRUNCATION_HANDLING:
+          case SWP_PEAK_TRUNCATION_HANDLING:
             if (currentStatus.isSweepDone) {
                 return SWP_WAITING;
             }
@@ -822,7 +915,7 @@ static SwpState_t NextState(SwpState_t state) {
                 return SWP_PEAK_FINDING_ANALYSIS;
             }
             // Remain in truncation handling if no flags are set
-            return SWP_PEAK_TRUNCATION_HANDLING;
+            return SWP_PEAK_FINDING_ANALYSIS;  // Update this to transition correctly
 
         case SWP_WAITING:
             if (currentStatus.isSweepRequested) {
@@ -835,4 +928,5 @@ static SwpState_t NextState(SwpState_t state) {
     }
 }
 
+//find and verify peak or just verify peak?
 

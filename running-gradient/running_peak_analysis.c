@@ -69,7 +69,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         //printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
-        if (increase_duration > peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase) {
+        if (increase_duration > peak_analysis_params.min_consistent_trend_count || average_increase > peak_analysis_params.min_average_increase) {
             flags.move_to_right = true;
             flags.close_to_peak = true;
             flags.far_to_peak = false;
@@ -96,7 +96,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         //printf("Average Decrease: %.6f over interval [%u - %u]\n", average_decrease, trends->decrease_info.start_index, trends->decrease_info.end_index);
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
-        if (decrease_duration > peak_analysis_params.min_consistent_trend_count && average_decrease < peak_analysis_params.min_average_decrease) {
+        if (decrease_duration > peak_analysis_params.min_consistent_trend_count || average_decrease < peak_analysis_params.min_average_decrease) {
             flags.go_to_left = true;
             flags.close_to_peak = true;
             flags.far_to_peak = false;
@@ -184,6 +184,64 @@ void log_final_direction(int nextDirection) {
 }
 
 /**
+ * @brief Analyzes the trend and concavity within a window of data to determine the direction of movement towards a peak.
+ *
+ * This function is designed to evaluate the trend and concavity within a windowed dataset using Recursive Least Squares (RLS)
+ * regression techniques. Specifically, it fits the values within the window (size defined by `window_size`) to a third-order
+ * polynomial model using RLS to detect rapid increases in the first-order gradients, which can indicate proximity to a peak.
+ *
+ * ### Function Workflow:
+ * 
+ * 1. **Gradient Trend Detection via Cubic RLS**:
+ *    - The function initially applies a windowed Recursive Least Squares (RLS) fitting to a third-order polynomial.
+ *    - The goal is to detect rapid increases in the first-order gradients, which suggest proximity to a peak.
+ *    - Using the RLS method ensures that the fitting accounts for all the data within the window while continuously updating 
+ *      as new data points are added. The window size is fixed and equals the defined `window_size`.
+ *    - If significant increasing gradients are detected, it indicates we are nearing a peak.
+ *
+ * 2. **Evaluating Trends (Left vs. Right)**:
+ *    - The function evaluates the trends of increasing and decreasing intervals by analyzing the gradients.
+ *    - After analyzing the trend intervals, the function determines whether the ongoing trend suggests the peak is 
+ *      to the left or right of the current window.
+ *    - If the evaluation suggests that the peak is still far away (i.e., no rapid changes in the gradients), 
+ *      the window is split in half, and the sum of gradients for each half is compared.
+ *        - The first half corresponds to the earlier part of the window, and the second half to the latter.
+ *        - The function checks whether the total sum of the first-order gradients in the first half is higher 
+ *          or lower than that of the second half. This helps infer the direction in which the peak might be located.
+ *    - If this test yields no conclusive result, the function defaults to using the significant gradient trends 
+ *      derived from the `detect_significant_gradient_trends` function.
+ *
+ * 3. **Peak Detection and Validation**:
+ *    - If the analysis concludes that the window is centered around a peak (indicated by `on_the_peak`), the function
+ *      attempts to validate whether this is a true peak or a false one.
+ *    - To validate the peak, the function fits the data in the window to a second-order polynomial using RLS.
+ *    - The second-order gradient is then analyzed to determine the concavity of the curve.
+ *    - If the second-order gradient is sufficiently high (indicating a sharp concave curve), the function concludes that
+ *      the window is centered around a valid peak.
+ *
+ * ### Function Details:
+ * 
+ * - **Input Data**: The function accepts a pointer to the data within a window (`data`), the size of the window (`window_size`), 
+ *   and a `forgetting_factor` which influences how much weight is given to newer data points during the RLS fitting.
+ * - **Window Splitting**: If the peak is not close, the window is split into two halves. The function then compares the 
+ *   gradients of the first and second halves to infer the direction of the peak.
+ * - **Trend Direction**: Based on the analysis, the function assigns a direction indicating whether the peak is likely 
+ *   to be to the left or right of the current window. If the results are inconclusive, it returns `UNDECIDED`.
+ * - **Concavity Analysis**: When a peak is suspected, the function verifies whether the second-order gradient 
+ *   supports the presence of a true peak, marking the peak as valid if so.
+ *
+ * @param data The pointer to the start of the window (within the larger buffer).
+ * @param window_size The number of data points in the window (subset of the buffer).
+ * @param forgetting_factor A double value, typically close to 1, that determines the weight given to newer data points in the RLS analysis.
+ * @return SegmentAnalysisResult A structure containing information about the direction to move (left, right, undecided),
+ *         whether a potential or true peak was found, and the detected concavity pattern.
+ *
+ * @see detect_significant_gradient_trends
+ * @see determine_trend_direction
+ * @see compute_total_second_order_gradient
+ * @see track_gradient_trends_with_quadratic_regression
+ */
+/**
  * @brief Analyzes the trend and concavity within a window of data to determine the direction of movement.
  *
  * This function will now work on a subset of the buffer, starting from the provided window start index.
@@ -210,18 +268,19 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
         }
     };
 
-    printf("****************************************** Cubic regression increase/decrease interval analysis...\n");
+    printf("[analysis]-->Cubic regression increase/decrease interval analysis...\n");
     PeakTrendAnalysisResult significant_trends = detect_significant_gradient_trends(data, window_size, 0, CUBIC_RLS_WINDOW, forgetting_factor);
 
-    printf("****************************************** Determining cubic regression linear gradient sums...\n");
     TrendDirectionFlags direction_flags = determine_trend_direction(&significant_trends, window_size, 0);
 
+    // Check if we are on the peak
     if (direction_flags.on_the_peak) {
         result.nextDirection = ON_PEAK;
         log_peak_detection(true);
         goto concavity_analysis;
     }
 
+    // Check for directional movements based on the trends
     if (direction_flags.move_to_right) {
         result.nextDirection = RIGHT_SIDE;
         log_direction_determined(RIGHT_SIDE);
@@ -236,41 +295,46 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
         log_direction_determined(LEFT_SIDE);
     }
 
+    // Check if far from peak, compare the left and right parts of the window
     if (direction_flags.far_to_peak) {
-        //printf("|||--> Far from peak. Determining direction by comparing gradient parts...\n");
-        GradientComparisonResult gradient_result = compare_gradient_parts(data, 0, forgetting_factor); //BURADAKI THRESHOLDLARA DA BAKMAMIZ LAZIM.
+        
+        printf("[analysis]--> compare gradient parts.\n");
+        GradientComparisonResult gradient_result = compare_gradient_parts(data, 0, forgetting_factor); 
         log_gradient_comparison(gradient_result);
 
-        if (gradient_result.dominant_side != UNDECIDED) {
+        // Handle the NEGATIVE_UNDECIDED case
+        if (gradient_result.dominant_side == NEGATIVE_UNDECIDED) {
+            //printf("[analysis]--> Both sides have negative gradients with no significant difference. Negative undecided.\n");
+            result.nextDirection = NEGATIVE_UNDECIDED;
+        } else if (gradient_result.dominant_side != UNDECIDED) {
             result.nextDirection = gradient_result.dominant_side;
         }
     } else {
 concavity_analysis: 
-        
-        printf("****************************************** Performing concavity analysis...\n");
+        printf("[analysis]--> Performing concavity analysis...\n");
 
-        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(data, window_size, 0, 30, forgetting_factor); // INCREASELERIN BŞALADIKLARI YERDEN YAP BUNU?!
+        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(data, window_size, 0, 30, forgetting_factor); 
         
-        //printf("*\n", gradient_trends.increase_info.max_sum);
-
-        if (gradient_trends.increase_info.valid && gradient_trends.increase_info.max_sum > 2.5) { //SHOULD NOT BE HARDCODED //make sure we complete it. SAYI SAYMALI. BURADA ON_PEAK CHECK ALIYOR DİYE GİRİYOR.
+        // If the increase trend is strong enough, mark it as ON_PEAK
+        if (gradient_trends.increase_info.valid && gradient_trends.increase_info.max_sum > 2.5) { 
             log_significant_trend("increasing", gradient_trends.increase_info.max_sum);
             result.nextDirection = ON_PEAK;
             goto end_analysis;
         }
         
+        // If the decrease trend is strong enough, mark it as ON_PEAK
         if (gradient_trends.decrease_info.valid && gradient_trends.decrease_info.max_sum < -2.5) {
             log_significant_trend("decreasing", gradient_trends.decrease_info.max_sum);
             result.nextDirection = ON_PEAK;
             goto end_analysis;
         }
-        
     }
 
 end_analysis:
     log_final_direction(result.nextDirection);
     return result;
 }
+
 
 
 /**
@@ -297,19 +361,19 @@ bool verify_peak_at_index(uint16_t buffer_start_index) {
     );
 
     // Debugging: Print out the results from the find_and_verify_quadratic_peak function
-    printf("[verify_peak_at_index] Peak result:\n");
-    printf("  peak_found: %d\n", peak_result.peak_found);
-    printf("  peak_index: %d\n", peak_result.peak_index);
-    printf("  is_truncated_left: %d\n", peak_result.is_truncated_left);
-    printf("  is_truncated_right: %d\n", peak_result.is_truncated_right);
+    //printf("[verify_peak_at_index] Peak result:\n");
+    //printf("  peak_found: %d\n", peak_result.peak_found);
+    //printf("  peak_index: %d\n", peak_result.peak_index);
+    //printf("  is_truncated_left: %d\n", peak_result.is_truncated_left);
+    //printf("  is_truncated_right: %d\n", peak_result.is_truncated_right);
 
     // If a peak is found, adjust the peak index to match the real phaseAngle array
     if (peak_result.peak_found) {
         // Debugging: Print current buffer and phase information
-        printf("[verify_peak_at_index] Debugging current buffer state:\n");
-        printf("  buffer_manager.current_phase_index: %d\n", buffer_manager.current_phase_index);
-        printf("  buffer_start_index: %d\n", buffer_start_index);
-        printf("  peak_result.peak_index: %d\n", peak_result.peak_index);
+        //printf("[verify_peak_at_index] Debugging current buffer state:\n");
+        //printf("  buffer_manager.current_phase_index: %d\n", buffer_manager.current_phase_index);
+        //printf("  buffer_start_index: %d\n", buffer_start_index);
+        //printf("  peak_result.peak_index: %d\n", peak_result.peak_index);
 
         // Adjust the peak index to match the real phaseAngle array
         uint16_t real_peak_index = buffer_manager.current_phase_index + (peak_result.peak_index);

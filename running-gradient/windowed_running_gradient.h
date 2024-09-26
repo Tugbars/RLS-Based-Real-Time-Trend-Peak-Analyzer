@@ -36,8 +36,9 @@ typedef struct {
 typedef enum {
     LEFT_SIDE = -1,                       /**< Indicates that the trend is on the left side of a peak. */
     RIGHT_SIDE = 1,                       /**< Indicates that the trend is on the right side of a peak. */
-    UNDECIDED = 0,                         /**< Indicates that the trend's position relative to a peak is undecided. */
-    ON_PEAK = 2                          // New enumeration value for when the trend is on the peak
+    UNDECIDED = 0,                        /**< Indicates that the trend's position relative to a peak is undecided. */
+    ON_PEAK = 2,                          /**< Indicates that the trend is on the peak. */
+    NEGATIVE_UNDECIDED = 3                /**< Indicates that both sides have negative trends with no significant difference. */
 } PeakPosition;
 
 /**

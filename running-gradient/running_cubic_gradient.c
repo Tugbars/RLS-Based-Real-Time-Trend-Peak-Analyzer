@@ -387,7 +387,7 @@ GradientTrendIndices find_consistent_increase(double *gradients, size_t start_in
     GradientTrendIndices increase_info = {0, 0, false, 0.0};
     bool tracking_increase = false;  // Flag to track if we're currently observing a consistent increase.
     double cumulative_sum = 0.0;  // Variable to accumulate the sum of positive gradients.
-    int decrease_count = 0;  // Counter to track consecutive decreases.
+    int decrease_count = 0;  // Counter to track consecutive decreases.  // TODO: NO NEED TO BE DOUBLE. 
 
     #ifdef CONSISTENT_TREND_DEBUG
     printf("Starting find_consistent_increase\n");
@@ -476,7 +476,7 @@ GradientTrendIndices find_consistent_decrease(double *gradients, size_t start_in
     GradientTrendIndices decrease_info = {0, 0, false, 0.0};
     bool tracking_decrease = false;
     double cumulative_sum = 0.0;
-    int increase_count = 0;
+    int increase_count = 0;  // TODO: NO NEED TO BE DOUBLE. 
 
     #ifdef CONSISTENT_TREND_DEBUG
     printf("Starting find_consistent_decrease\n");
@@ -680,18 +680,27 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
     double significance_threshold = cubic_analysis_params.significance_threshold;
     uint16_t duration_threshold = cubic_analysis_params.duration_threshold;
 
-    double average_increase = 0.0;
-    double average_decrease = 0.0;
+    double average_increase = 0.0; // TODO: NO NEED TO BE DOUBLE
+    double average_decrease = 0.0; // TODO: NO NEED TO BE DOUBLE. 
 
     // Calculate average increase if a valid increase trend is detected
     if (trend_result.increase_info.valid) {
         double sum_of_gradients = trend_result.increase_info.max_sum;
+        //printf("[DEBUG] Sum of gradients (increase max_sum): %.6f\n", sum_of_gradients);
+        
         uint16_t index_difference = trend_result.increase_info.end_index - trend_result.increase_info.start_index;
+        //printf("[DEBUG] Index difference (increase end_index - start_index): %u\n", index_difference);
+        
         average_increase = sum_of_gradients / (double)index_difference;
+        //printf("[DEBUG] Average increase (sum_of_gradients / index_difference): %.6f\n", average_increase);
 
         // Evaluate significance based on global threshold and new average conditions
-        if ((sum_of_gradients > significance_threshold && index_difference > duration_threshold) ||
-            (index_difference >= peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase)) {
+        bool is_large_gradient = (sum_of_gradients > significance_threshold);
+        bool is_long_duration = (index_difference > duration_threshold);
+        bool is_consistent_trend = (index_difference >= peak_analysis_params.min_consistent_trend_count);
+        bool is_significant_average_increase = (average_increase > peak_analysis_params.min_average_increase);
+        
+        if ((is_large_gradient && is_long_duration) || (is_consistent_trend && is_significant_average_increase)) {
             result.significant_increase = true;
         }
     }
@@ -699,19 +708,30 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
     // Calculate average decrease if a valid decrease trend is detected
     if (trend_result.decrease_info.valid) {
         double sum_of_gradients = trend_result.decrease_info.max_sum;
+        //printf("[DEBUG] Sum of gradients (max_sum): %.6f\n", sum_of_gradients);
+        
         uint16_t index_difference = trend_result.decrease_info.end_index - trend_result.decrease_info.start_index;
+        //printf("[DEBUG] Index difference (end_index - start_index): %u\n", index_difference);
+        
         average_decrease = sum_of_gradients / (double)index_difference;
+        //printf("[DEBUG] Average decrease (sum_of_gradients / index_difference): %.6f\n", average_decrease);
 
+        // Define meaningful variable names for readability
+        bool is_significant_gradient_sum = (sum_of_gradients < -significance_threshold);
+        bool is_long_duration = (index_difference > duration_threshold);
+        bool is_consistent_trend = (index_difference >= peak_analysis_params.min_consistent_trend_count);
+        bool is_below_average_decrease = (average_decrease < peak_analysis_params.min_average_decrease);
+        
         // Evaluate significance based on global threshold and new average conditions
-        if ((sum_of_gradients < -significance_threshold && index_difference > duration_threshold) ||
-            (index_difference >= peak_analysis_params.min_consistent_trend_count && average_decrease < peak_analysis_params.min_average_decrease)) {
+        if ((is_significant_gradient_sum && is_long_duration) ||
+            (is_consistent_trend && is_below_average_decrease)) {
             result.significant_decrease = true;
         }
     }
 
     // Debugging: Print the final result summary
-    printf("Trend detection complete. Significant Increase: %s, Significant Decrease: %s\n",
-           result.significant_increase ? "Yes" : "No", result.significant_decrease ? "Yes" : "No");
+    // printf("Trend detection complete. Significant Increase: %s, Significant Decrease: %s\n",
+    //       result.significant_increase ? "Yes" : "No", result.significant_decrease ? "Yes" : "No");
 
     if (trend_result.increase_info.valid) {
         printf("Average Increase: %.6f over interval [%u - %u]\n", 
