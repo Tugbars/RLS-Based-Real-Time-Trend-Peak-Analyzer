@@ -30,7 +30,7 @@ typedef union {
         uint8_t isSweepDone : 1;            /**< Flag indicating if the sweep is done. */
         uint8_t isNotCentered : 1;          /**< Flag indicating if the peak is still not centered. */
         uint8_t isVerificationFailed : 1;   /**< Flag indicating if peak verification failed. */
-        uint8_t reserved : 1;               /**< Reserved bit for future use. */
+        uint8_t isBoundaryError : 1;        /**< Flag indicating if a boundary error occurred. */
     };
 } SwpStatus_t;
 
@@ -43,6 +43,37 @@ SwpStatus_t currentStatus = { .value = 0x0 };  // Initialize all flags to 0
 /** @brief Current state of the sliding window analysis state machine. */
 SwpState_t currentState = SWP_WAITING;  // Initialize to SWP_WAITING state
 
+/**
+ * @brief Defines the maximum number of peak centering attempts.
+ * 
+ * This constant sets a limit on the number of times the algorithm will attempt to center the peak.
+ * After reaching this limit, the system will stop further attempts to prevent an infinite loop in cases
+ * where the peak cannot be accurately centered. This ensures that the process either succeeds within 
+ * a reasonable number of attempts or gracefully exits if centering is not possible.
+ */
+#define MAX_CENTERING_ATTEMPTS 4
+
+/**
+ * @brief Tracks the number of attempts made to center the peak.
+ * 
+ * This variable is used to limit the number of centering attempts in the peak centering state. 
+ * Each time the peak centering process fails to accurately center the peak, this counter is 
+ * incremented. Once it reaches a predefined maximum number of attempts (MAX_CENTERING_ATTEMPTS),
+ * the system will exit the centering state and transition to a waiting or error state to prevent 
+ * an infinite loop in cases where the peak cannot be centered properly.
+ */
+static uint8_t centering_attempts = 0;
+
+/**
+ * @brief Adjusts the forgetting factor used in peak centering analysis.
+ * 
+ * The forgetting factor controls how much weight is given to more recent data points during the 
+ * gradient analysis for peak centering. This variable is incremented by 0.1 after each centering 
+ * attempt to give more weight to the newer data points, allowing the algorithm to make progressively 
+ * larger adjustments in subsequent attempts. This helps improve the accuracy of peak centering 
+ * over multiple attempts.
+ */
+static double centering_forgetting_factor = 0.7;
 /******************************************************************************/
 /* Function Prototypes (Internal Functions) */
 /******************************************************************************/
@@ -103,6 +134,40 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
 /* Sliding Window Analysis Functions */
 /******************************************************************************/
 
+/**
+ * @brief Performs a buffer update if one is required.
+ *
+ * This function checks whether a buffer update is necessary based on the `buffer_update_info` structure,
+ * which contains information about pending buffer updates. If a buffer update is required (indicated by the
+ * `needs_update` flag), the function proceeds to update the phase angles in the buffer by calling 
+ * `update_phaseAngle_to_buffer`. Once the update is completed, the function triggers a state transition
+ * by calling `SwpProcessStateChange()`. If no buffer update is needed, it directly calls `SwpProcessStateChange()`.
+ *
+ * @param phaseAngles Pointer to the array of phase angles that are used in the analysis.
+ */
+void SweepSampleCb(const double* phaseAngles) {
+    if (buffer_update_info.needs_update) {
+        AdptSweepAddDataPoint(
+            phaseAngles,
+            buffer_update_info.phase_index_start,
+            buffer_update_info.buffer_start_index,
+            buffer_update_info.move_amount
+        );
+
+        // Reset the update flag
+        buffer_update_info.needs_update = false;
+    }
+
+    // Check if an error occurred during buffer update
+    if (buffer_update_info.error_occurred) {
+        printf("[SweepSampleCb] Error occurred during buffer update. Setting boundary error flag.\n");
+        currentStatus.isBoundaryError = 1;  // Set the boundary error flag
+        buffer_update_info.error_occurred = false;  // Reset the error flag
+    }
+
+    // Proceed to the next state
+    SwpProcessStateChange();
+}
 
 /**
  * @brief Initializes the buffer manager for sliding window analysis.
@@ -119,8 +184,8 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 78;
-    init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);
+    int start_index = 215;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
+    init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);                                                    //START INDEX. START FREQUENCY - MY OWN THRESHOLD OLMALI. PEAK BURADAN HESAPLANACAK MESELA 11300 ISE PEAK 110'da CIKTIYSA 11410 olacak.
 
     // Debugging: Print initialization state
     printf("[DEBUG] Buffer Manager initialized:\n");
@@ -138,9 +203,9 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
  * @param phase_angle_size Size of the phase angle array.
  * @param callback Function pointer to the callback function to be executed after analysis.
  */
-void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) {
-    ctx.phaseAngles = phaseAngles;
-    ctx.phase_angle_size = phase_angle_size;
+void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) { //ILK MES START OLARAK GOREV ALABILIR. 
+    ctx.phaseAngles = phaseAngles;      //GEREK YOK.
+    ctx.phase_angle_size = phase_angle_size; //GEREK YOK. 
     ctx.callback = callback;
     ctx.isTruncatedLeft = false;
     ctx.isTruncatedRight = false;
@@ -149,7 +214,7 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     initBufferManager(sweep->data);
     
     	// detect_significant_gradient_trends, determine_trend_direction
-	init_cubic_rls_analysis_parameters(                                                                                                        //CHECKS IF THERE IS A PEAK VIA COUNTING/SUMMING CONSISTENT GRADIENT INCREASES 
+	init_cubic_rls_analysis_parameters(                                                                                                      
         12.0,   // significance_thresh: Threshold for determining significant cubic trends.                                                     
                // Trends with a sum of gradients above this threshold are considered significant.
         5,     // duration_thresh: Minimum number of consecutive points required for a trend to be considered significant.                     
@@ -179,9 +244,9 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     // Initialize the on-peak analysis parameters for average gradient thresholds and consistent trend count
    // // INCREASELERIN BŞALADIKLARI YERDEN YAP BUNU?!
     init_on_peak_analysis_parameters( 
-        0.8,  // min_avg_increase: Minimum average increase required to consider a significant increasing trend. LEFT SIDE OF THE PEAK            //KULLANILIYOR MU?
+        0.8,  // min_avg_increase: Minimum average increase required to consider a significant increasing trend. LEFT SIDE OF THE PEAK            
                // Ensures that only trends with substantial average gradient are flagged as significant.
-        -0.19, // min_avg_decrease: Minimum average decrease required to consider a significant decreasing trend. RIGHT SIDE OF THE PEAK          //KULLANILIYOR MU?
+        -0.19, // min_avg_decrease: Minimum average decrease required to consider a significant decreasing trend. RIGHT SIDE OF THE PEAK          
                // Ensures that only trends with substantial average gradient are flagged as significant.
         5      // min_consistent_trend_count: Minimum number of consecutive data points required for a trend to be considered consistent. 
                // Helps ensure that only sustained trends are analyzed.
@@ -189,8 +254,8 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     
     // Initialize gradient analysis parameters
     init_gradient_analysis_params(
-        0.1,  // gradient_thresh: Threshold for determining a significant gradient increase.                                                    //COMPARE GRADIENT PARTSIN UYESI. SADECE BUYUK GRADIENT ARTIŞLARINI SAYIYOR. 
-        0.6   // min_gradient_total: Minimum total gradient to flag a significant trend.                                                        //BUNUN ALTINDAKİLERE UNDECIDED DİYORUZ. 
+        0.1,  // gradient_thresh: Threshold for determining a significant gradient increase.                                                   
+        0.6   // min_gradient_total: Minimum total gradient to flag a significant trend.                                                        //THE SUM OF GRADIENTS BELOW IS CONSIDERED AS UNDECIDED
     );
     
         // Enable sweep request
@@ -231,7 +296,7 @@ static void OnEntryInitialAnalysis(void) {
  *
  * This function performs segment analysis on the current window of data to determine the direction of movement.
  */
-static void OnEntrySegmentAnalysis(void) {                                                                                                                 // yok 
+static void OnEntrySegmentAnalysis(void) {                                                                                                                
     float forgetting_factor = 0.5f;
 
     SegmentAnalysisResult result = segment_trend_and_concavity_analysis(
@@ -261,7 +326,7 @@ static void OnEntryUpdateBufferDirection(void) {
     update_buffer_for_direction(ctx.phaseAngles, ctx.direction, buffer_manager.window_size / 2);
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                                 //VAR
+    SweepSampleCb(ctx.phaseAngles);                                                                                              
 
     STATE_FUNCS[SWP_UPDATE_BUFFER_DIRECTION].isComplete = true;
     SwpProcessStateChange();  // Move to next state
@@ -281,7 +346,7 @@ static void OnEntryUndecidedTrendCase(void) {
     }
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                                   //VAR
+    SweepSampleCb(ctx.phaseAngles);                                                                                                   
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
@@ -358,6 +423,15 @@ static void OnEntryPeakCentering(void) {
 
     // Reset the isNotCentered flag
     currentStatus.isNotCentered = 0;
+    
+    // Check if we've exceeded the max number of centering attempts
+    if (centering_attempts >= MAX_CENTERING_ATTEMPTS) {
+        printf("Max centering attempts reached. Transitioning to WAITING state.\n");
+        currentStatus.isSweepDone = 1; // Mark the sweep as done
+        STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = true;
+        SwpProcessStateChange();
+        return;
+    }
 
     // Get the start index in the buffer
     uint16_t start_index = buffer_manager.current_buffer_index;
@@ -368,9 +442,15 @@ static void OnEntryPeakCentering(void) {
         buffer_manager.buffer,
         buffer_manager.buffer_size,
         start_index,
-        0.7 // NOTE: MAKE IT AS BIG AS POSSIBLE TO BE ABLE TO CENTER THE PEAK AS GOOD AS POSSIBLE. 
+        centering_forgetting_factor // NOTE: MAKE IT AS BIG AS POSSIBLE TO BE ABLE TO CENTER THE PEAK AS GOOD AS POSSIBLE. 
     );
-
+    
+     // Increment the forgetting factor for the next attempt
+    centering_forgetting_factor += 0.1;
+        
+    // Increment the centering attempts counter
+    centering_attempts++;
+                    
     printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
 
     // Check if the peak is centered based on the total gradient sum
@@ -441,11 +521,14 @@ static void OnEntryPeakCentering(void) {
                 SwpProcessStateChange();
 
             } else {
+                
+                printf("Peak not centered. Attempt %d of %d\n", centering_attempts + 1, MAX_CENTERING_ATTEMPTS);
+    
                 // Move the window and set up buffer update if necessary
                 move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);
         
                 // After moving the window, perform buffer update if needed
-                SweepSampleCb(ctx.phaseAngles);                                                                                                      //VAR
+                SweepSampleCb(ctx.phaseAngles);                                                                                                    
 
                 currentStatus.isCentered = 1;
 
@@ -546,6 +629,10 @@ static void OnEntryPeakFindingAnalysis(void) {                                  
             // Peak verification successful
             if (verification_result.peak_found) {
                 printf("Peak verification successful, peak is centered.\n");
+                // If the peak is successfully centered, reset the counter and proceed
+                centering_attempts = 0;
+                centering_forgetting_factor = 0.7; // Reset the forgetting factor
+                
                 print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval    
                 currentStatus.isSweepDone = 1;  // Mark the sweep as done
             } else {
@@ -858,6 +945,9 @@ void SwpProcessStateChange(void) {
 /**
  * @brief Determines the next state in the state machine based on the current state and status flags.
  *
+ * This function is used to manage state transitions in the sliding window analysis process. It checks for various flags
+ * such as boundary errors, sweep completion, and centering conditions to determine the appropriate next state.
+ *
  * @param state The current state.
  * @return SwpState_t The next state to transition to.
  */
@@ -881,21 +971,34 @@ static SwpState_t NextState(SwpState_t state) {
             }
             return SWP_UPDATE_BUFFER_DIRECTION;
 
-        case SWP_PEAK_CENTERING:                           
-            if (currentStatus.isCentered) {             // IN EITHER  CASE IT IS GOING TO BE FLAGGED AS CENTERED. TODO: IMPROVE THIS NONSENSE. 
-                return SWP_PEAK_FINDING_ANALYSIS;
-            } else {
-                return SWP_PEAK_CENTERING;
-            }
-        return SWP_PEAK_CENTERING;
-
         case SWP_UPDATE_BUFFER_DIRECTION:
+            if (currentStatus.isBoundaryError) {
+                return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
+            }
             return SWP_SEGMENT_ANALYSIS;
 
+        case SWP_PEAK_CENTERING:
+            if (currentStatus.isBoundaryError) {
+                return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
+            }
+            if (currentStatus.isCentered) {
+                return SWP_PEAK_FINDING_ANALYSIS;
+            }
+            if (currentStatus.isSweepDone) {
+                return SWP_WAITING;
+            }
+            return SWP_PEAK_CENTERING;
+
         case SWP_UNDECIDED_TREND_CASE:
+            if (currentStatus.isBoundaryError) {
+                return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
+            }
             return SWP_SEGMENT_ANALYSIS;
 
         case SWP_PEAK_FINDING_ANALYSIS:
+            if (currentStatus.isBoundaryError) {
+                return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
+            }
             if (ctx.isTruncatedLeft || ctx.isTruncatedRight) {
                 return SWP_PEAK_TRUNCATION_HANDLING;
             }
@@ -907,15 +1010,17 @@ static SwpState_t NextState(SwpState_t state) {
             }
             return SWP_PEAK_FINDING_ANALYSIS;
 
-          case SWP_PEAK_TRUNCATION_HANDLING:
+        case SWP_PEAK_TRUNCATION_HANDLING:
+            if (currentStatus.isBoundaryError) {
+                return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
+            }
             if (currentStatus.isSweepDone) {
                 return SWP_WAITING;
             }
             if (currentStatus.isVerificationFailed) {
                 return SWP_PEAK_FINDING_ANALYSIS;
             }
-            // Remain in truncation handling if no flags are set
-            return SWP_PEAK_FINDING_ANALYSIS;  // Update this to transition correctly
+            return SWP_PEAK_FINDING_ANALYSIS;
 
         case SWP_WAITING:
             if (currentStatus.isSweepRequested) {
@@ -928,5 +1033,15 @@ static SwpState_t NextState(SwpState_t state) {
     }
 }
 
-//find and verify peak or just verify peak?
+/**
+ * @brief Sets the boundary error flag in the currentStatus.
+ *
+ * This function allows external modules (like buffer_manager) to set the boundary error flag in the sliding window
+ * analysis state machine, which will trigger a state transition to SWP_WAITING.
+ *
+ * @param flag The value to set for the boundary error flag (1 for error, 0 to clear).
+ */
+void set_boundary_error_flag(uint8_t flag) {
+    currentStatus.isBoundaryError = flag;
+}
 

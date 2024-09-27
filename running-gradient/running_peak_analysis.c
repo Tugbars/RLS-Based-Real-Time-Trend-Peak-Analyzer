@@ -73,7 +73,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
             flags.move_to_right = true;
             flags.close_to_peak = true;
             flags.far_to_peak = false;
-            printf("Average increase over threshold. Flags set: move_to_right, close_to_peak.\n");
+            printf("Flags set: move_to_right, close_to_peak.\n");
         }
 
         // Also check if the significant increase is towards the right side of the window
@@ -82,7 +82,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
                 flags.move_to_right = true;
                 flags.close_to_peak = true;
                 flags.far_to_peak = false;
-                printf("Significant increasing trend extends beyond the window. Flags set: move_to_right, close_to_peak.\n");
+                printf("Flags set: move_to_right, close_to_peak.\n");
             }
         }
     }
@@ -100,7 +100,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
             flags.go_to_left = true;
             flags.close_to_peak = true;
             flags.far_to_peak = false;
-            printf("Average decrease below threshold. Flags set: go_to_left, close_to_peak.\n");
+            printf("Flags set: go_to_left, close_to_peak.\n");
         }
 
         // Also check if the significant decrease is towards the left side of the window
@@ -108,7 +108,7 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
             flags.go_to_left = true;
             flags.close_to_peak = true;
             flags.far_to_peak = false;
-            printf("Significant decreasing trend in the first half of the window. Flags set: go_to_left, close_to_peak.\n");
+            printf("Flags set: go_to_left, close_to_peak.\n");
         }
     }
 
@@ -181,6 +181,8 @@ void log_final_direction(int nextDirection) {
             printf("UNDECIDED\n");
             break;
     }
+    
+    printf("\n");
 }
 
 /**
@@ -268,7 +270,7 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
         }
     };
 
-    printf("[analysis]-->Cubic regression increase/decrease interval analysis...\n");
+    printf("[analysis]-->Cubic regression increase/decrease...\n");
     PeakTrendAnalysisResult significant_trends = detect_significant_gradient_trends(data, window_size, 0, CUBIC_RLS_WINDOW, forgetting_factor);
 
     TrendDirectionFlags direction_flags = determine_trend_direction(&significant_trends, window_size, 0);
@@ -294,6 +296,8 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
         result.nextDirection = LEFT_SIDE;
         log_direction_determined(LEFT_SIDE);
     }
+    
+    printf("\n");
 
     // Check if far from peak, compare the left and right parts of the window
     if (direction_flags.far_to_peak) {
@@ -301,6 +305,8 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
         printf("[analysis]--> compare gradient parts.\n");
         GradientComparisonResult gradient_result = compare_gradient_parts(data, 0, forgetting_factor); 
         log_gradient_comparison(gradient_result);
+        
+        printf("\n");
 
         // Handle the NEGATIVE_UNDECIDED case
         if (gradient_result.dominant_side == NEGATIVE_UNDECIDED) {
@@ -313,12 +319,14 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
 concavity_analysis: 
         printf("[analysis]--> Performing concavity analysis...\n");
 
-        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(data, window_size, 0, 30, forgetting_factor); 
+        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(data, window_size, 0, RLS_WINDOW, forgetting_factor); 
         
         // If the increase trend is strong enough, mark it as ON_PEAK
         if (gradient_trends.increase_info.valid && gradient_trends.increase_info.max_sum > 2.5) { 
             log_significant_trend("increasing", gradient_trends.increase_info.max_sum);
             result.nextDirection = ON_PEAK;
+            
+            printf("\n");
             goto end_analysis;
         }
         
@@ -326,6 +334,8 @@ concavity_analysis:
         if (gradient_trends.decrease_info.valid && gradient_trends.decrease_info.max_sum < -2.5) {
             log_significant_trend("decreasing", gradient_trends.decrease_info.max_sum);
             result.nextDirection = ON_PEAK;
+            
+            printf("\n");
             goto end_analysis;
         }
     }

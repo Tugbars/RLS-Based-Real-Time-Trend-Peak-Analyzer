@@ -6,8 +6,6 @@
 #include <stdbool.h>
 #include "mqs_def.h"
 
-#define WINDOW_SIZE 30
-
 /**
  * @struct RunningGradient
  * @brief A structure to represent the state of a running linear regression model using Recursive Least Squares (RLS).

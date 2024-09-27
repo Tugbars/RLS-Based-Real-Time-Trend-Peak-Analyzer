@@ -85,8 +85,8 @@ typedef struct {
  * - The phaseAngles array should contain the phase angle measurements collected from the impedance analyzer.
  * - The callback function can be used to perform actions upon certain events or completion of the analysis.
  */
-void SwpProcessStateChange(void);
- 
 void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback);
+
+void set_boundary_error_flag(uint8_t flag);
 
 #endif // SLIDING_WINDOW_ANALYSIS_H

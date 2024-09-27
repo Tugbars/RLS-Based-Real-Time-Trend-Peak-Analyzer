@@ -30,6 +30,7 @@ typedef struct {
     int16_t phase_index_start;
     int16_t buffer_start_index;
     uint16_t move_amount;
+    bool error_occurred;  // Error flag to indicate boundary errors
 } BufferUpdateInfo;
 
 /** @brief Extern declaration of buffer_update_info for use across different files. */
@@ -84,14 +85,6 @@ void init_buffer_manager(
  */
 void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size);
 
-/**
- * @brief Updates the buffer with phaseAngle values and optionally sets impedance.
- *
- * @param phaseAngles        Pointer to the array of phase angles.
- * @param phase_index_start  The starting index of the phase angles to update from.
- * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
- */
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
 
 /**
  * @brief Updates the buffer to shift the analysis window in a specified direction.
@@ -118,5 +111,13 @@ void perform_buffer_update_if_needed(const double* phaseAngles);
 
 void print_analysis_interval(const double* phaseAngles, int total_size);
 
+/**
+ * @brief Updates the buffer with phaseAngle values and optionally sets impedance.
+ *
+ * @param phaseAngles        Pointer to the array of phase angles.
+ * @param phase_index_start  The starting index of the phase angles to update from.
+ * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
+ */
+void  AdptSweepAddDataPoint(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
 
 #endif // BUFFER_MANAGER_H

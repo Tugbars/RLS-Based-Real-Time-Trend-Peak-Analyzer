@@ -5,9 +5,6 @@
 #include "mqs_def.h"
 #include <stdbool.h>
 
-// Define the window size for the cubic RLS
-#define CUBIC_RLS_WINDOW 30
-
 //#define CONSISTENT_TREND_DEBUG
 //#define DEBUG_CUBIC_GRADIENT_CALC
 

@@ -23,39 +23,7 @@ int analysis_start_index = -1;  // Track the initial start index
 int analysis_end_index = -1;    // Track the final end index
 int buffer_shift_offset = 0;  // New global variable to track the shift relative to the buffer.
 
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
-
-
-/**
- * @brief Performs a buffer update if one is required.
- *
- * This function checks whether a buffer update is necessary based on the `buffer_update_info` structure,
- * which contains information about pending buffer updates. If a buffer update is required (indicated by the
- * `needs_update` flag), the function proceeds to update the phase angles in the buffer by calling 
- * `update_phaseAngle_to_buffer`. Once the update is completed, the function triggers a state transition
- * by calling `SwpProcessStateChange()`. If no buffer update is needed, it directly calls `SwpProcessStateChange()`.
- *
- * @param phaseAngles Pointer to the array of phase angles that are used in the analysis.
- */
-void SweepSampleCb(const double* phaseAngles) {
-    if (buffer_update_info.needs_update) {
-        update_phaseAngle_to_buffer(
-            phaseAngles,
-            buffer_update_info.phase_index_start,
-            buffer_update_info.buffer_start_index,
-            buffer_update_info.move_amount
-        );
-
-        // Reset the update flag
-        buffer_update_info.needs_update = false;
-
-        // Now proceed to the next state
-        SwpProcessStateChange();
-    } else {
-        // No update needed, proceed to next state
-        SwpProcessStateChange();
-    }
-}
+void AdptSweepAddDataPoint(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
 
 
 /**
@@ -87,7 +55,7 @@ void init_buffer_manager(
     buffer_manager.buffer = buffer_ptr;
     buffer_manager.buffer_size = buffer_size;
     buffer_manager.window_size = window_size;
-    buffer_manager.current_phase_index = start_index;
+    buffer_manager.current_phase_index = start_index;                                                 //STARTING FREQUENCY - MY OWN MODIFIER.
     buffer_manager.current_buffer_index = buffer_size / 2; // Start from the middle of the buffer
 
     buffer_manager.mapping_start_index = start_index;
@@ -125,8 +93,8 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
     printf("Loading initial window of data into the buffer.\n");
     #endif
 
-    // Use update_phaseAngle_to_buffer to load the initial window of data
-    update_phaseAngle_to_buffer(phaseAngles, buffer_manager.current_phase_index, buffer_manager.current_buffer_index, buffer_manager.window_size);  // Pass the full window size as move_amount
+    // Use AdptSweepAddDataPoint to load the initial window of data
+    AdptSweepAddDataPoint(phaseAngles, buffer_manager.current_phase_index, buffer_manager.current_buffer_index, buffer_manager.window_size);  // Pass the full window size as move_amount
 
     // Ensure that phase indices are within bounds after updating
     for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
@@ -161,7 +129,7 @@ void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size) {
  * @param phase_index_start The starting index of the phase angles to update from.
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
  */
-void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount) {
+void AdptSweepAddDataPoint(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount) {
     // Loop to update the buffer with new phaseAngle values
     for (uint16_t i = 0; i < move_amount; ++i) {
         int16_t phase_index = phase_index_start + i;
@@ -169,16 +137,16 @@ void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_
 
         // Debugging: Log the details of buffer update before actual update
         #ifdef BUFFER_DEBUG
-        printf("[update_phaseAngle_to_buffer] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n", buffer_index, phase_index, phaseAngles[phase_index]);
+        printf("[AdptSweepAddDataPoint] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n", buffer_index, phase_index, phaseAngles[phase_index]);
         #endif
 
         // Copy phaseAngle and optionally set impedance
         buffer_manager.buffer[buffer_index].phaseAngle = phaseAngles[phase_index];
-        buffer_manager.buffer[buffer_index].impedance = 0.0; // Mock impedance, update if needed
+        //buffer_manager.buffer[buffer_index].impedance = 0.0; // Mock impedance, update if needed
 
         // Debugging: Log the update in the buffer
         #ifdef BUFFER_DEBUG
-        printf("[update_phaseAngle_to_buffer] Buffer updated at phase index %d with phaseAngle %.6f (buffer index: %d)\n", phase_index, phaseAngles[phase_index], buffer_index);
+        printf("[AdptSweepAddDataPoint] Buffer updated at phase index %d with phaseAngle %.6f (buffer index: %d)\n", phase_index, phaseAngles[phase_index], buffer_index);
         #endif
     }
 }
@@ -217,7 +185,7 @@ void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_
  *    - Ensures that `phase_index_start` is within the bounds of `phaseAngles`.
  *    - If out of bounds, logs an error message and aborts the operation.
  * 4. **Update Buffer with New Phase Angles**:
- *    - Calls `update_phaseAngle_to_buffer` to load the new phase angles into the buffer starting at `buffer_start_index`.
+ *    - Calls `AdptSweepAddDataPoint` to load the new phase angles into the buffer starting at `buffer_start_index`.
  * 5. **Update Buffer Manager Indices**:
  *    - Updates `buffer_manager.current_phase_index` with the new `phase_index_start`.
  *    - Updates `buffer_manager.current_buffer_index` with the new `buffer_start_index`.
@@ -229,7 +197,7 @@ void update_phaseAngle_to_buffer(const double* phaseAngles, int16_t phase_index_
  * - The buffer is updated in place, and the buffer manager's indices are adjusted to reflect the new positions.
  *
  *
- * @see update_phaseAngle_to_buffer
+ * @see AdptSweepAddDataPoint
  * @see buffer_manager
  */
 void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount) {
@@ -246,6 +214,15 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
         // Moving left
         phase_index_start = buffer_manager.current_phase_index - move_amount;
         buffer_start_index = buffer_manager.current_buffer_index - move_amount;
+
+        // Check if the buffer indices are out of bounds
+        if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
+            printf("[update_buffer] Buffer index out of bounds. Setting error flag.\n");
+            set_boundary_error_flag(1);  // Set the boundary error flag
+            return;  // Exit the function to stop further processing
+        }
+
+        // Handle wrap-around for circular buffer, if needed
         if (buffer_start_index < 0) {
             buffer_start_index += buffer_manager.buffer_size;
         }
@@ -267,8 +244,20 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
 
     } else if (direction == RIGHT_SIDE) {
         // Moving right
-        phase_index_start = buffer_manager.current_phase_index + buffer_manager.window_size;
-        buffer_start_index = (buffer_manager.current_buffer_index + buffer_manager.window_size) % buffer_manager.buffer_size;
+        phase_index_start = buffer_manager.current_phase_index + move_amount;
+        buffer_start_index = buffer_manager.current_buffer_index + move_amount;
+
+        // Check if the buffer indices are out of bounds
+        if (buffer_start_index >= buffer_manager.buffer_size || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
+            printf("[update_buffer] Buffer index out of bounds. Setting error flag.\n");
+            set_boundary_error_flag(1);  // Set the boundary error flag
+            return;  // Exit the function to stop further processing
+        }
+
+        // Handle wrap-around for circular buffer, if needed
+        if (buffer_start_index >= buffer_manager.buffer_size) {
+            buffer_start_index -= buffer_manager.buffer_size;
+        }
 
         // Debugging: Log the movement and new indices
         #ifdef BUFFER_DEBUG
@@ -278,7 +267,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
 
         // Update indices
         buffer_manager.current_phase_index += move_amount;
-        buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
+        buffer_manager.current_buffer_index = buffer_start_index;
 
         // Update analysis end index if necessary
         int16_t new_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
@@ -294,7 +283,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
         return;
     }
 
-    // Instead of calling update_phaseAngle_to_buffer, set up buffer update info
+    // Set up buffer update info instead of calling AdptSweepAddDataPoint
     buffer_update_info.needs_update = true;
     buffer_update_info.phase_index_start = phase_index_start;
     buffer_update_info.buffer_start_index = buffer_start_index;
@@ -347,7 +336,7 @@ void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size)
     printf("[handle_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
     //#endif
 
-    // Set up buffer update info instead of calling update_phaseAngle_to_buffer
+    // Set up buffer update info instead of calling AdptSweepAddDataPoint
     buffer_update_info.needs_update = true;
     buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
     buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
@@ -392,7 +381,7 @@ void handle_negative_undecided_case(const double* phaseAngles, uint16_t phase_an
     printf("[handle_negative_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
     #endif
 
-    // Set up buffer update info instead of calling update_phaseAngle_to_buffer
+    // Set up buffer update info instead of calling AdptSweepAddDataPoint
     buffer_update_info.needs_update = true;
     buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
     buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
@@ -422,6 +411,7 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
     printf("[move_window_and_update_if_needed] Attempting to move window. Direction: %d, Move amount: %d\n", direction, move_amount);
     //#endif
 
+    // Check if we need a buffer update based on the direction
     if (direction == LEFT_SIDE) {
         if (new_phase_index_start < analysis_start_index) {
             need_buffer_update = true;
@@ -434,24 +424,62 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
         return;  // Invalid direction
     }
 
+    // Perform buffer update if needed
     if (need_buffer_update) {
         // Set up buffer update info
         update_buffer_for_direction(phaseAngles, direction, move_amount);
     } else {
         // Adjust indices without updating the buffer
         if (direction == LEFT_SIDE) {
-            buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index - move_amount + buffer_manager.buffer_size) % buffer_manager.buffer_size;
-        } else {
-            buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
-        }
+            int16_t new_buffer_index_start = buffer_manager.current_buffer_index - move_amount;
+            if (new_buffer_index_start < 0) {
+                new_buffer_index_start += buffer_manager.buffer_size;
+            }
+            int16_t new_buffer_index_end = (new_buffer_index_start + buffer_manager.window_size - 1);
 
-        // Update buffer_shift_offset
+            // Check if the new buffer indices exceed boundaries
+            if (new_buffer_index_start < 0 || new_buffer_index_end >= buffer_manager.buffer_size) {
+                printf("[move_window_and_update_if_needed] Buffer index out of bounds. Setting error flag.\n");
+                
+                // Set boundary error flag using the setter function
+                set_boundary_error_flag(1);  // Set the boundary error flag
+                
+                return;  // Exit the function to stop further processing
+            }
+
+            // Adjust buffer manager indices
+            buffer_manager.current_phase_index = new_phase_index_start;
+            buffer_manager.current_buffer_index = new_buffer_index_start;
+
+        } else if (direction == RIGHT_SIDE) {
+            int16_t new_buffer_index_start = buffer_manager.current_buffer_index + move_amount;
+            if (new_buffer_index_start >= buffer_manager.buffer_size) {
+                new_buffer_index_start -= buffer_manager.buffer_size;
+            }
+            int16_t new_buffer_index_end = (new_buffer_index_start + buffer_manager.window_size - 1);
+
+            // Check if the new buffer indices exceed boundaries
+            if (new_buffer_index_start < 0 || new_buffer_index_end >= buffer_manager.buffer_size) {
+                printf("[move_window_and_update_if_needed] Buffer index out of bounds. Setting error flag.\n");
+
+                // Set boundary error flag using the setter function
+                set_boundary_error_flag(1);  // Set the boundary error flag
+                
+                return;  // Exit the function to stop further processing
+            }
+
+            // Adjust buffer manager indices
+            buffer_manager.current_phase_index = new_phase_index_start;
+            buffer_manager.current_buffer_index = new_buffer_index_start;
+        }
+        
+         // Update buffer_shift_offset
         //buffer_shift_offset = (buffer_shift_offset + move_amount) % buffer_manager.buffer_size;
 
+        // Debugging: Print the updated buffer indices
         //#ifdef BUFFER_DEBUG
-        printf("[move_window_and_update_if_needed] Window already in buffer. Shifted by %d. New buffer_shift_offset: %d\n", move_amount, buffer_shift_offset);
+        printf("[move_window_and_update_if_needed] Window shifted. Current buffer index: %d, Phase index: %d\n", 
+               buffer_manager.current_buffer_index, buffer_manager.current_phase_index);
         //#endif
     }
 
@@ -462,14 +490,8 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
     if (new_phase_index_end > analysis_end_index) {
         analysis_end_index = new_phase_index_end;
     }
-
-    // Debug: Print the updated indices
-    //#ifdef BUFFER_DEBUG
-    printf("[move_window_and_update_if_needed] Updated window to phase index [%d - %d]\n", 
-           new_phase_index_start, new_phase_index_end);
-    printf("Updated buffer index to %d\n", buffer_manager.current_buffer_index);
-    //#endif
 }
+
 
 /**
  * @brief Performs a buffer update if one is required.
@@ -477,7 +499,7 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
  * This function checks whether a buffer update is necessary based on the `buffer_update_info` structure,
  * which contains information about pending buffer updates. If a buffer update is required (indicated by the
  * `needs_update` flag), the function proceeds to update the phase angles in the buffer by calling 
- * `update_phaseAngle_to_buffer`. Once the update is completed, the `needs_update` flag is reset to prevent
+ * `AdptSweepAddDataPoint`. Once the update is completed, the `needs_update` flag is reset to prevent
  * redundant updates.
  *
  * ### Why This Function is Needed:
@@ -502,7 +524,7 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
  */
 void perform_buffer_update_if_needed(const double* phaseAngles) {
     if (buffer_update_info.needs_update) {
-        update_phaseAngle_to_buffer(
+        AdptSweepAddDataPoint(
             phaseAngles,
             buffer_update_info.phase_index_start,
             buffer_update_info.buffer_start_index,

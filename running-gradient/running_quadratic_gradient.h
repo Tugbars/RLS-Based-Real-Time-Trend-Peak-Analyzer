@@ -6,8 +6,7 @@
 #include "mqs_def.h"
 #include "running_cubic_gradient.h"
 
-/** @brief Define a constant for the RLS window size. */
-#define RLS_WINDOW 30
+
 
 // #define DEBUG_GRADIENT_CALC
 // #define DEBUG_QUADRATIC
