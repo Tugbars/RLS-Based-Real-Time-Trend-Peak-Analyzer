@@ -13,7 +13,12 @@
 #include "sliding_window_analysis.h"
 
 void myCallbackFunction(void) {
-    printf("Callback executed: State machine returned to SWP_WAITING.\n");
+    if (boundaryErrorOccurred) {
+        printf("Callback executed: State machine interrupted due to boundary error.\n");
+        boundaryErrorOccurred = false;  // Reset the persistent flag after handling the error
+    } else {
+        printf("Callback executed: State machine returned to SWP_WAITING.\n");
+    }
 }
 
 void PrepareBaseSweep(MesSweep_t *const sweep, MqsRawDataSet_t *const data)

@@ -30,7 +30,6 @@ typedef struct {
     int16_t phase_index_start;
     int16_t buffer_start_index;
     uint16_t move_amount;
-    bool error_occurred;  // Error flag to indicate boundary errors
 } BufferUpdateInfo;
 
 /** @brief Extern declaration of buffer_update_info for use across different files. */

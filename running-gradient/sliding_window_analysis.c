@@ -43,6 +43,9 @@ SwpStatus_t currentStatus = { .value = 0x0 };  // Initialize all flags to 0
 /** @brief Current state of the sliding window analysis state machine. */
 SwpState_t currentState = SWP_WAITING;  // Initialize to SWP_WAITING state
 
+// Add a global flag to track boundary error
+bool boundaryErrorOccurred = false;
+
 /**
  * @brief Defines the maximum number of peak centering attempts.
  * 
@@ -73,7 +76,7 @@ static uint8_t centering_attempts = 0;
  * larger adjustments in subsequent attempts. This helps improve the accuracy of peak centering 
  * over multiple attempts.
  */
-static double centering_forgetting_factor = 0.7;
+static double centering_forgetting_factor = 0.9;
 /******************************************************************************/
 /* Function Prototypes (Internal Functions) */
 /******************************************************************************/
@@ -147,7 +150,7 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
  */
 void SweepSampleCb(const double* phaseAngles) {
     if (buffer_update_info.needs_update) {
-        AdptSweepAddDataPoint(
+        AdptSweepAddDataPoint(                                                    //MESSWEEPADDDATAPOINT YAPISINA UYMALI
             phaseAngles,
             buffer_update_info.phase_index_start,
             buffer_update_info.buffer_start_index,
@@ -156,17 +159,13 @@ void SweepSampleCb(const double* phaseAngles) {
 
         // Reset the update flag
         buffer_update_info.needs_update = false;
-    }
 
-    // Check if an error occurred during buffer update
-    if (buffer_update_info.error_occurred) {
-        printf("[SweepSampleCb] Error occurred during buffer update. Setting boundary error flag.\n");
-        currentStatus.isBoundaryError = 1;  // Set the boundary error flag
-        buffer_update_info.error_occurred = false;  // Reset the error flag
+        // Now proceed to the next state
+        SwpProcessStateChange();
+    } else {
+        // No update needed, proceed to next state
+        SwpProcessStateChange();
     }
-
-    // Proceed to the next state
-    SwpProcessStateChange();
 }
 
 /**
@@ -184,7 +183,7 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 215;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
+    int start_index = 57;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
     init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);                                                    //START INDEX. START FREQUENCY - MY OWN THRESHOLD OLMALI. PEAK BURADAN HESAPLANACAK MESELA 11300 ISE PEAK 110'da CIKTIYSA 11410 olacak.
 
     // Debugging: Print initialization state
@@ -231,13 +230,13 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     init_quadratic_rls_analysis_parameters(
         1.0,  // centered_gradient_sum: If the total second-order gradient sum is less than or equal to this value,
               // the peak is considered centered based on the gradient analysis.
-        2,    // max_decrease_count: Maximum number of consecutive negative gradients allowed
+        1,    // max_decrease_count: Maximum number of consecutive negative gradients allowed
               // when tracking an increasing trend. Allows for minor fluctuations without discarding a valid trend.
-        2,    // max_increase_count: Maximum number of consecutive positive gradients allowed
+        1,    // max_increase_count: Maximum number of consecutive positive gradients allowed
               // when tracking a decreasing trend. Helps to filter out noise when identifying a decreasing trend.
         5,    // min_trend_count: Minimum number of consistent trends required to consider a peak valid.
               // Ensures that only sustained trends are analyzed.
-        2     // allowable_inconsistency_count: Allowable number of inconsistencies in trend detection.
+        1     // allowable_inconsistency_count: Allowable number of inconsistencies in trend detection.
               // Permits minor deviations without discarding the trend.
     );
     
@@ -254,8 +253,8 @@ void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, ui
     
     // Initialize gradient analysis parameters
     init_gradient_analysis_params(
-        0.1,  // gradient_thresh: Threshold for determining a significant gradient increase.                                                   
-        0.6   // min_gradient_total: Minimum total gradient to flag a significant trend.                                                        //THE SUM OF GRADIENTS BELOW IS CONSIDERED AS UNDECIDED
+        0.1,  // gradient_thresh: Threshold for determining a significant gradient increase.                                                    //COMPARE GRADIENT PARTSIN UYESI. SADECE BUYUK GRADIENT ARTIŞLARINI SAYIYOR. 
+        0.6   // min_gradient_total: Minimum total gradient to flag a significant trend.                                                        //BUNUN ALTINDAKİLERE UNDECIDED DİYORUZ. 
     );
     
         // Enable sweep request
@@ -346,11 +345,118 @@ static void OnEntryUndecidedTrendCase(void) {
     }
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                                   
+    SweepSampleCb(ctx.phaseAngles);                                                                                                   //VAR
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
 }
+
+
+/**
+ * @brief Adjusts the global forgetting factor based on gradient sums to improve peak centering.
+ *
+ * This function calculates the total second-order gradient sum within the buffer window and 
+ * adjusts the global centering forgetting factor to better center the peak. It first checks 
+ * whether increasing or decreasing the forgetting factor results in a more favorable gradient 
+ * sum. The function then modifies the forgetting factor iteratively to emphasize newer or 
+ * older data points, improving the accuracy of the peak centering process.
+ *
+ * ### Parameters:
+ * @param buffer Pointer to the data buffer containing the phase angle values.
+ * @param buffer_size Size of the data buffer.
+ * @param start_index Starting index in the buffer for the gradient calculation.
+ * @param previous_gradient_sum Pointer to the previous total gradient sum for comparison.
+ * @param centering_attempts Current number of centering attempts.
+ *
+ * @return double The updated global forgetting factor after the adjustment.
+ *
+ * ### Intention:
+ * - The goal of this function is to adjust the forgetting factor used during peak centering
+ *   to achieve better alignment of the data window with the actual peak in the signal.
+ * - It does this by comparing the total sum of second-order gradients (a measure of the curvature
+ *   of the data) across different forgetting factor values.
+ * - If increasing or decreasing the forgetting factor improves the total gradient sum (indicating 
+ *   better symmetry around the peak), the function adjusts the global forgetting factor accordingly.
+ * - The function is designed to handle both symmetric and asymmetric peaks, refining the 
+ *   centering process over multiple attempts.
+ *
+ * ### Handling Peak Asymmetry:
+ * - In real-world signals, peaks can often be **asymmetric** due to noise or inherent system behavior.
+ * - **Increasing** the forgetting factor helps correct asymmetry by giving more weight to recent data points.
+ * - **Decreasing** the forgetting factor allows the algorithm to smooth the influence of newer points
+ *   and gives more emphasis to older data, which helps when the peak asymmetry lies in earlier data.
+ * - The function dynamically adjusts the forgetting factor to **adapt** to the specific peak characteristics
+ *   and asymmetries, refining the centering process until the second-order gradients are minimized.
+ * 
+ * - The iterative adjustment helps ensure that the peak is centered by minimizing the total sum 
+ *   of the second-order gradients, effectively handling any peak asymmetry.
+ */
+double adjust_forgetting_factor(const double* buffer, uint16_t buffer_size, uint16_t start_index, 
+                                double* previous_gradient_sum, 
+                                uint8_t centering_attempts) 
+{
+    // Get the total gradient sum with the global centering_forgetting_factor
+    double total_gradient_sum = compute_total_second_order_gradient(buffer, buffer_size, start_index, centering_forgetting_factor);
+
+    // Check if this is the first centering attempt
+    if (*previous_gradient_sum == -1.0) {
+        // First attempt, no comparison to previous value
+        *previous_gradient_sum = total_gradient_sum;
+    } else if (centering_attempts == 1) {
+        // Second attempt, try both increasing and decreasing the forgetting factor
+
+        // Store the current total_gradient_sum and forgetting factor
+        double increased_forgetting_factor = centering_forgetting_factor + 0.2;
+        double decreased_forgetting_factor = centering_forgetting_factor - 0.2;
+
+        // Compute the total gradient sum for increased forgetting factor
+        double increased_gradient_sum = compute_total_second_order_gradient(
+            buffer, buffer_size, start_index, increased_forgetting_factor
+        );
+
+        // Compute the total gradient sum for decreased forgetting factor
+        double decreased_gradient_sum = compute_total_second_order_gradient(
+            buffer, buffer_size, start_index, decreased_forgetting_factor
+        );
+
+        // Compare which one is better
+        if (fabs(increased_gradient_sum) < fabs(*previous_gradient_sum)) {
+            // Use increased forgetting factor if it's better
+            centering_forgetting_factor = increased_forgetting_factor;
+            total_gradient_sum = increased_gradient_sum;
+            printf("Increased forgetting factor improved centering: %.2f\n", centering_forgetting_factor);
+        } else if (fabs(decreased_gradient_sum) < fabs(*previous_gradient_sum)) {
+            // Use decreased forgetting factor if it's better
+            centering_forgetting_factor = decreased_forgetting_factor;
+            total_gradient_sum = decreased_gradient_sum;
+            printf("Decreased forgetting factor improved centering: %.2f\n", centering_forgetting_factor);
+        } else {
+            // If neither is better, stick with the current one
+            printf("Neither increased nor decreased forgetting factor improved centering, keeping it: %.2f\n", centering_forgetting_factor);
+        }
+    } else {
+        // For subsequent attempts, compare the current and previous gradient sums
+        if (fabs(total_gradient_sum) > fabs(*previous_gradient_sum)) {
+            // If the new gradient sum is worse, decrease the forgetting factor
+            centering_forgetting_factor -= 0.2;
+            if (centering_forgetting_factor < 0.1) {
+                // Ensure the factor does not go below a certain minimum (e.g., 0.1)
+                centering_forgetting_factor = 0.1;
+            }
+            printf("Centering worsened, reducing forgetting factor to: %.2f\n", centering_forgetting_factor);
+        } else {
+            // If the new gradient sum is better, increase the forgetting factor
+            centering_forgetting_factor += 0.2;
+            printf("Centering improved, increasing forgetting factor to: %.2f\n", centering_forgetting_factor);
+        }
+    }
+
+    // Update the previous gradient sum with the current one for the next comparison
+    *previous_gradient_sum = total_gradient_sum;
+
+    return centering_forgetting_factor;  // Return the updated forgetting factor
+}
+
 
 /**
  * @brief Entry function for the SWP_PEAK_CENTERING state.
@@ -418,6 +524,10 @@ static void OnEntryUndecidedTrendCase(void) {
  * @see SwpProcessStateChange
  */
 static void OnEntryPeakCentering(void) {  
+    
+     // Add this at the top of the function (initialize a static variable to hold the previous sum)
+    static double previous_gradient_sum = -1.0;
+    
     // Reset the isComplete flag for this state
     STATE_FUNCS[SWP_PEAK_CENTERING].isComplete = false;
 
@@ -433,25 +543,25 @@ static void OnEntryPeakCentering(void) {
         return;
     }
 
-    // Get the start index in the buffer
-    uint16_t start_index = buffer_manager.current_buffer_index;
-    uint16_t window_size = buffer_manager.window_size;
-
-    // Compute the total sum of second-order gradients using the buffer directly
+    // Perform the rest of the peak centering logic as before
     double total_gradient_sum = compute_total_second_order_gradient(
         buffer_manager.buffer,
         buffer_manager.buffer_size,
-        start_index,
-        centering_forgetting_factor // NOTE: MAKE IT AS BIG AS POSSIBLE TO BE ABLE TO CENTER THE PEAK AS GOOD AS POSSIBLE. 
+        buffer_manager.current_buffer_index,
+        centering_forgetting_factor // Use the updated global forgetting factor
     );
     
-     // Increment the forgetting factor for the next attempt
-    centering_forgetting_factor += 0.1;
-        
+        // Adjust the global forgetting factor based on the total gradient sum
+    adjust_forgetting_factor(
+        buffer_manager.buffer,
+        buffer_manager.buffer_size,
+        buffer_manager.current_buffer_index,
+        &previous_gradient_sum,
+        centering_attempts
+    );
+    
     // Increment the centering attempts counter
     centering_attempts++;
-                    
-    printf("Total sum of second-order gradients: %.6f\n", total_gradient_sum);
 
     // Check if the peak is centered based on the total gradient sum
     if (total_gradient_sum <= quadratic_analysis_params.centered_gradient_sum &&
@@ -463,13 +573,12 @@ static void OnEntryPeakCentering(void) {
 
     } else {
         // Need to adjust the buffer to center the peak
-        // Obtain gradient trends
         GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
             buffer_manager.buffer,
             buffer_manager.buffer_size,
-            start_index,
-            window_size,
-            0.5 // Forgetting factor
+            buffer_manager.current_buffer_index,
+            buffer_manager.window_size,
+            centering_forgetting_factor  // Use the global forgetting factor
         );
 
         // Check if both increasing and decreasing trends are valid
@@ -540,7 +649,6 @@ static void OnEntryPeakCentering(void) {
         }
     }
 }
-
 
 /**
  * @brief Entry function for the SWP_PEAK_FINDING_ANALYSIS state.
@@ -1041,7 +1149,15 @@ static SwpState_t NextState(SwpState_t state) {
  *
  * @param flag The value to set for the boundary error flag (1 for error, 0 to clear).
  */
+// Function to set the boundary error flag
 void set_boundary_error_flag(uint8_t flag) {
     currentStatus.isBoundaryError = flag;
+    if (flag) {
+        boundaryErrorOccurred = true; // Set the persistent boundary error flag
+    }
 }
 
+
+//9.1
+
+//139, 180 hata veriyor. 

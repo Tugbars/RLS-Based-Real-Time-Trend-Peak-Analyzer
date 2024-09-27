@@ -37,6 +37,8 @@
  */
 typedef void (*Callback_t)(void);
 
+extern bool boundaryErrorOccurred;
+
 /**
  * @enum SwpState_t
  * @brief Enumeration of states in the sliding window analysis state machine.

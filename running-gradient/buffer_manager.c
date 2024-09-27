@@ -214,15 +214,14 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
         // Moving left
         phase_index_start = buffer_manager.current_phase_index - move_amount;
         buffer_start_index = buffer_manager.current_buffer_index - move_amount;
-
-        // Check if the buffer indices are out of bounds
+        
+         // Check if the buffer indices are out of bounds
         if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
             printf("[update_buffer] Buffer index out of bounds. Setting error flag.\n");
             set_boundary_error_flag(1);  // Set the boundary error flag
             return;  // Exit the function to stop further processing
         }
 
-        // Handle wrap-around for circular buffer, if needed
         if (buffer_start_index < 0) {
             buffer_start_index += buffer_manager.buffer_size;
         }
@@ -244,20 +243,16 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
 
     } else if (direction == RIGHT_SIDE) {
         // Moving right
-        phase_index_start = buffer_manager.current_phase_index + move_amount;
-        buffer_start_index = buffer_manager.current_buffer_index + move_amount;
-
-        // Check if the buffer indices are out of bounds
-        if (buffer_start_index >= buffer_manager.buffer_size || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
+        phase_index_start = buffer_manager.current_phase_index + buffer_manager.window_size;
+        buffer_start_index = (buffer_manager.current_buffer_index + buffer_manager.window_size) % buffer_manager.buffer_size;
+        
+         // Check if the buffer indices are out of bounds
+        if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
             printf("[update_buffer] Buffer index out of bounds. Setting error flag.\n");
             set_boundary_error_flag(1);  // Set the boundary error flag
             return;  // Exit the function to stop further processing
         }
 
-        // Handle wrap-around for circular buffer, if needed
-        if (buffer_start_index >= buffer_manager.buffer_size) {
-            buffer_start_index -= buffer_manager.buffer_size;
-        }
 
         // Debugging: Log the movement and new indices
         #ifdef BUFFER_DEBUG
@@ -267,7 +262,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
 
         // Update indices
         buffer_manager.current_phase_index += move_amount;
-        buffer_manager.current_buffer_index = buffer_start_index;
+        buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
 
         // Update analysis end index if necessary
         int16_t new_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
@@ -283,7 +278,7 @@ void update_buffer_for_direction(const double* phaseAngles, int direction, int m
         return;
     }
 
-    // Set up buffer update info instead of calling AdptSweepAddDataPoint
+    // Instead of calling AdptSweepAddDataPoint, set up buffer update info
     buffer_update_info.needs_update = true;
     buffer_update_info.phase_index_start = phase_index_start;
     buffer_update_info.buffer_start_index = buffer_start_index;
@@ -411,7 +406,6 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
     printf("[move_window_and_update_if_needed] Attempting to move window. Direction: %d, Move amount: %d\n", direction, move_amount);
     //#endif
 
-    // Check if we need a buffer update based on the direction
     if (direction == LEFT_SIDE) {
         if (new_phase_index_start < analysis_start_index) {
             need_buffer_update = true;
@@ -424,62 +418,24 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
         return;  // Invalid direction
     }
 
-    // Perform buffer update if needed
     if (need_buffer_update) {
         // Set up buffer update info
         update_buffer_for_direction(phaseAngles, direction, move_amount);
     } else {
         // Adjust indices without updating the buffer
         if (direction == LEFT_SIDE) {
-            int16_t new_buffer_index_start = buffer_manager.current_buffer_index - move_amount;
-            if (new_buffer_index_start < 0) {
-                new_buffer_index_start += buffer_manager.buffer_size;
-            }
-            int16_t new_buffer_index_end = (new_buffer_index_start + buffer_manager.window_size - 1);
-
-            // Check if the new buffer indices exceed boundaries
-            if (new_buffer_index_start < 0 || new_buffer_index_end >= buffer_manager.buffer_size) {
-                printf("[move_window_and_update_if_needed] Buffer index out of bounds. Setting error flag.\n");
-                
-                // Set boundary error flag using the setter function
-                set_boundary_error_flag(1);  // Set the boundary error flag
-                
-                return;  // Exit the function to stop further processing
-            }
-
-            // Adjust buffer manager indices
             buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = new_buffer_index_start;
-
-        } else if (direction == RIGHT_SIDE) {
-            int16_t new_buffer_index_start = buffer_manager.current_buffer_index + move_amount;
-            if (new_buffer_index_start >= buffer_manager.buffer_size) {
-                new_buffer_index_start -= buffer_manager.buffer_size;
-            }
-            int16_t new_buffer_index_end = (new_buffer_index_start + buffer_manager.window_size - 1);
-
-            // Check if the new buffer indices exceed boundaries
-            if (new_buffer_index_start < 0 || new_buffer_index_end >= buffer_manager.buffer_size) {
-                printf("[move_window_and_update_if_needed] Buffer index out of bounds. Setting error flag.\n");
-
-                // Set boundary error flag using the setter function
-                set_boundary_error_flag(1);  // Set the boundary error flag
-                
-                return;  // Exit the function to stop further processing
-            }
-
-            // Adjust buffer manager indices
+            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index - move_amount + buffer_manager.buffer_size) % buffer_manager.buffer_size;
+        } else {
             buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = new_buffer_index_start;
+            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
         }
-        
-         // Update buffer_shift_offset
+
+        // Update buffer_shift_offset
         //buffer_shift_offset = (buffer_shift_offset + move_amount) % buffer_manager.buffer_size;
 
-        // Debugging: Print the updated buffer indices
         //#ifdef BUFFER_DEBUG
-        printf("[move_window_and_update_if_needed] Window shifted. Current buffer index: %d, Phase index: %d\n", 
-               buffer_manager.current_buffer_index, buffer_manager.current_phase_index);
+        printf("[move_window_and_update_if_needed] Window already in buffer. Shifted by %d. New buffer_shift_offset: %d\n", move_amount, buffer_shift_offset);
         //#endif
     }
 
@@ -490,8 +446,14 @@ void move_window_and_update_if_needed(const double* phaseAngles, int direction, 
     if (new_phase_index_end > analysis_end_index) {
         analysis_end_index = new_phase_index_end;
     }
-}
 
+    // Debug: Print the updated indices
+    //#ifdef BUFFER_DEBUG
+    printf("[move_window_and_update_if_needed] Updated window to phase index [%d - %d]\n", 
+           new_phase_index_start, new_phase_index_end);
+    printf("Updated buffer index to %d\n", buffer_manager.current_buffer_index);
+    //#endif
+}
 
 /**
  * @brief Performs a buffer update if one is required.
