@@ -46,6 +46,44 @@ SwpState_t currentState = SWP_WAITING;  // Initialize to SWP_WAITING state
 // Add a global flag to track boundary error
 bool boundaryErrorOccurred = false;
 
+/*******************************************************************************
+ * Undecided deadlock error control
+ ******************************************************************************/
+
+/**
+ * @brief Tracks the number of consecutive times the state machine enters the undecided case.
+ *un
+ * This variable is incremented each time the state machine enters the `SWP_UNDECIDED_TREND_CASE` state.
+ * It limits the number of times the system can enter the undecided state within a session. If the counter
+ * exceeds a predefined limit (e.g., 7), the system will transition to the `SWP_WAITING` state to prevent
+ * the state machine from getting stuck in an undecided loop. This helps ensure that the analysis progresses
+ * or halts gracefully if a decision cannot be reached.
+ */
+static uint8_t undecided_case_counter = 0;
+
+/**
+ * @brief Flag indicating that an error occurred due to exceeding the undecided case limit.
+ *
+ * This flag is set to `true` when the `undecided_case_counter` exceeds the maximum allowed value
+ * (e.g., 7 undecided states). When this flag is set, the system will transition to the `SWP_WAITING` state,
+ * and a warning will be displayed in the callback function executed by the state machine. The flag
+ * will be reset when the `SWP_WAITING` state is entered, indicating that the system is ready for
+ * a new session or sweep.
+ */
+static bool undecided_error_flag = false;
+
+/** @brief Maximum number of times the state machine can enter the undecided case within a session.
+ *
+ * This variable defines the limit on how many times the state machine can enter the `SWP_UNDECIDED_TREND_CASE`
+ * state before it triggers an error. If the `undecided_case_counter` exceeds this value, the system will
+ * transition to the `SWP_WAITING` state and raise an error flag, indicating that a resolution could not be reached.
+ */
+static const uint8_t MAX_UNDECIDED_CASE_ATTEMPTS = 7;
+
+/*******************************************************************************
+ * Peak centering deadlock error control
+ ******************************************************************************/
+
 /**
  * @brief Defines the maximum number of peak centering attempts.
  * 
@@ -76,7 +114,64 @@ static uint8_t centering_attempts = 0;
  * larger adjustments in subsequent attempts. This helps improve the accuracy of peak centering 
  * over multiple attempts.
  */
-static double centering_forgetting_factor = 0.9;
+static double centering_forgetting_factor = 0.7;
+
+/*******************************************************************************
+ * Repetitive shift deadlock error control
+ ******************************************************************************/
+ 
+ /**
+ * @brief Size of the shift tracker array used to detect alternating left and right shifts.
+ *
+ * This constant defines the size of the `shift_tracker` array, which stores the last two
+ * shift directions (LEFT, RIGHT) made during the sliding window analysis. The purpose is to
+ * detect whether the analysis is getting stuck in an alternating pattern of shifts.
+ */
+#define SHIFT_TRACKER_SIZE 2
+
+/**
+ * @brief Array to track the last two shift directions.
+ *
+ * This array stores the most recent shift directions (LEFT or RIGHT) that occurred during the
+ * sliding window analysis. If the shift directions alternate between LEFT and RIGHT over the
+ * last two shifts, the system concludes that the analysis is stuck and raises an error.
+ */
+static PeakPosition shift_tracker[SHIFT_TRACKER_SIZE] = {UNDECIDED, UNDECIDED};
+
+/**
+ * @brief Index for tracking the current position in the `shift_tracker` array.
+ *
+ * This variable tracks the current index in the `shift_tracker` array, which stores the last two
+ * shift directions. The array functions as a circular buffer, where the index wraps around after
+ * reaching the size of the array (`SHIFT_TRACKER_SIZE`).
+ */
+static uint8_t shift_tracker_index = 0;
+
+/**
+ * @brief Updates the shift tracker with the latest direction.
+ *
+ * This function updates the `shift_tracker` array with the most recent shift direction. The array
+ * functions as a circular buffer, meaning that once it reaches its size limit, it starts overwriting
+ * the oldest direction. The function also checks whether the last two shift directions alternated
+ * between LEFT and RIGHT. If this condition is met, an error is raised, and the analysis transitions
+ * to the `SWP_WAITING` state.
+ *
+ * @param new_direction The new shift direction (LEFT, RIGHT, or UNDECIDED).
+ */
+static void update_shift_tracker(PeakPosition new_direction) {
+    // Update the shift tracker with the latest direction
+    shift_tracker[shift_tracker_index] = new_direction;
+    shift_tracker_index = (shift_tracker_index + 1) % SHIFT_TRACKER_SIZE;
+
+    // Check if the analysis is stuck (LEFT → RIGHT → LEFT or RIGHT → LEFT → RIGHT)
+    if ((shift_tracker[0] == LEFT_SIDE && shift_tracker[1] == RIGHT_SIDE) ||
+        (shift_tracker[0] == RIGHT_SIDE && shift_tracker[1] == LEFT_SIDE)) {
+        printf("Error: Sliding window analysis is stuck alternating between left and right shifts.\n");
+        boundaryErrorOccurred = true;  // Raise an error flag
+        currentStatus.isSweepDone = 1; // End the analysis and go to SWP_WAITING
+    }
+}
+
 /******************************************************************************/
 /* Function Prototypes (Internal Functions) */
 /******************************************************************************/
@@ -183,7 +278,7 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 57;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
+    int start_index = 162;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
     init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);                                                    //START INDEX. START FREQUENCY - MY OWN THRESHOLD OLMALI. PEAK BURADAN HESAPLANACAK MESELA 11300 ISE PEAK 110'da CIKTIYSA 11410 olacak.
 
     // Debugging: Print initialization state
@@ -294,8 +389,10 @@ static void OnEntryInitialAnalysis(void) {
  * @brief Entry function for the SWP_SEGMENT_ANALYSIS state.
  *
  * This function performs segment analysis on the current window of data to determine the direction of movement.
+ * If the analysis is stuck alternating between left and right shifts, it raises an error and transitions to
+ * the `SWP_WAITING` state to prevent infinite looping.
  */
-static void OnEntrySegmentAnalysis(void) {                                                                                                                
+static void OnEntrySegmentAnalysis(void) {
     float forgetting_factor = 0.5f;
 
     SegmentAnalysisResult result = segment_trend_and_concavity_analysis(
@@ -305,6 +402,11 @@ static void OnEntrySegmentAnalysis(void) {
     );
 
     ctx.direction = result.nextDirection;
+
+    // Update the shift tracker with the new direction
+    update_shift_tracker(ctx.direction);
+
+    // Check if we are on the peak
     if (ctx.direction == ON_PEAK) {
         currentStatus.isPeakFound = 1;
     } else if (ctx.direction == UNDECIDED || ctx.direction == NEGATIVE_UNDECIDED) {
@@ -338,6 +440,16 @@ static void OnEntryUpdateBufferDirection(void) {
  * If it's a negative undecided case, it moves the window backward instead.
  */
 static void OnEntryUndecidedTrendCase(void) {
+    
+    if (undecided_case_counter >= MAX_UNDECIDED_CASE_ATTEMPTS) {
+        // Set the error flag and transition to SWP_WAITING
+        printf("Undecided case limit exceeded. Setting error flag and returning to SWP_WAITING.\n");
+        undecided_error_flag = true;
+        currentState = SWP_WAITING;
+        SwpProcessStateChange();
+        return;
+    }
+    
     if (ctx.direction == NEGATIVE_UNDECIDED) {
         handle_negative_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);  // Move the window backward
     } else {
@@ -345,7 +457,7 @@ static void OnEntryUndecidedTrendCase(void) {
     }
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                                   //VAR
+    SweepSampleCb(ctx.phaseAngles);                                                                                                  
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
@@ -602,14 +714,14 @@ static void OnEntryPeakCentering(void) {
 
             if (increase_duration > decrease_duration) {
                 // Peak is to the left; shift window to the right
-                shift_amount = (increase_duration - decrease_duration) + 1;
+                shift_amount = (increase_duration - decrease_duration) / 2;
                 direction = RIGHT_SIDE;
                 printf("Increase duration (%u) > decrease duration (%u). Moving right by %d.\n",
                        increase_duration, decrease_duration, shift_amount);
 
             } else if (decrease_duration > increase_duration) {
                 // Peak is to the right; shift window to the left
-                shift_amount = (decrease_duration - increase_duration) + 1;
+                shift_amount = (decrease_duration - increase_duration) / 2;
                 direction = LEFT_SIDE;
                 printf("Decrease duration (%u) > increase duration (%u). Moving left by %d.\n",
                        decrease_duration, increase_duration, shift_amount);
@@ -1077,7 +1189,10 @@ static SwpState_t NextState(SwpState_t state) {
             if (currentStatus.isPeakFound) {
                 return SWP_PEAK_CENTERING;
             }
-            return SWP_UPDATE_BUFFER_DIRECTION;
+            if (currentStatus.isSweepDone) {
+                return SWP_WAITING;  // Transition to WAITING state if sweep is done
+            }
+        return SWP_UPDATE_BUFFER_DIRECTION;
 
         case SWP_UPDATE_BUFFER_DIRECTION:
             if (currentStatus.isBoundaryError) {
@@ -1098,6 +1213,10 @@ static SwpState_t NextState(SwpState_t state) {
             return SWP_PEAK_CENTERING;
 
         case SWP_UNDECIDED_TREND_CASE:
+            // Check if undecided case counter has reached the limit
+            if (undecided_case_counter >= MAX_UNDECIDED_CASE_ATTEMPTS) {
+                return SWP_WAITING;  // Transition to SWP_WAITING if limit exceeded
+            }
             if (currentStatus.isBoundaryError) {
                 return SWP_WAITING;  // Transition to waiting if buffer boundary error occurred
             }

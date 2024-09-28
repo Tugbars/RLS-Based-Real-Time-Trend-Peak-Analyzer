@@ -61,12 +61,18 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
     uint16_t decrease_duration = 0;
 
     // Check for significant increasing trend
-    if (trends->significant_increase) { //SIGNIFICANT INCREASE THRESHOLDS SHOULD BE CHECKED 
+    if (trends->significant_increase) { // TODO: SIGNIFICANT INCREASE THRESHOLDS SHOULD BE CHECKED 
         increase_duration = trends->increase_info.end_index - trends->increase_info.start_index;
         average_increase = trends->increase_info.max_sum / (double)increase_duration;
 
         //printf("Significant increase detected. Increase end index: %u\n", trends->increase_info.end_index);
         //printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
+        
+         // Use the parameters from peak_analysis_params instead of hardcoded values
+        if (increase_duration > peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase + 2) { // +2 FOR SAFETY. 
+            flags.on_the_peak = true;
+             printf("On the peak detected. Consistent increase with an increase above the threshold. Flags set: on_the_peak.\n");
+        }
 
         // Use the parameters from peak_analysis_params instead of hardcoded values
         if (increase_duration > peak_analysis_params.min_consistent_trend_count || average_increase > peak_analysis_params.min_average_increase) {
@@ -310,33 +316,51 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
 
         // Handle the NEGATIVE_UNDECIDED case
         if (gradient_result.dominant_side == NEGATIVE_UNDECIDED) {
-            //printf("[analysis]--> Both sides have negative gradients with no significant difference. Negative undecided.\n");
             result.nextDirection = NEGATIVE_UNDECIDED;
         } else if (gradient_result.dominant_side != UNDECIDED) {
             result.nextDirection = gradient_result.dominant_side;
         }
-    } else {
-concavity_analysis: 
-        printf("[analysis]--> Performing concavity analysis...\n");
 
-        GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(data, window_size, 0, RLS_WINDOW, forgetting_factor); 
-        
-        // If the increase trend is strong enough, mark it as ON_PEAK
-        if (gradient_trends.increase_info.valid && gradient_trends.increase_info.max_sum > 2.5) { 
-            log_significant_trend("increasing", gradient_trends.increase_info.max_sum);
-            result.nextDirection = ON_PEAK;
+    } else {
+concavity_analysis:
+        //printf("[analysis]--> Performing concavity analysis...\n");
+
+        // Check if the increase trend is longer than 8 indices
+        uint16_t increase_trend_length = significant_trends.increase_info.end_index - significant_trends.increase_info.start_index;
+        if (significant_trends.significant_increase && increase_trend_length > 5) {
+            //printf("[analysis]--> Increase trend is longer than 8 indices (%u). Performing concavity analysis on increase trend.\n", increase_trend_length);
+             printf("\n");
+            // Perform concavity analysis on the increase trend
+            uint16_t start_index = significant_trends.increase_info.start_index;
+            uint16_t trend_window_size = increase_trend_length;
             
-            printf("\n");
-            goto end_analysis;
-        }
-        
-        // If the decrease trend is strong enough, mark it as ON_PEAK
-        if (gradient_trends.decrease_info.valid && gradient_trends.decrease_info.max_sum < -2.5) {
-            log_significant_trend("decreasing", gradient_trends.decrease_info.max_sum);
-            result.nextDirection = ON_PEAK;
+            // Debugging print statements for start_index and trend_window_size
+            printf("[debug] Start index for concavity analysis: %u\n", start_index);
+            printf("[debug] Trend window size for concavity analysis: %u\n", trend_window_size);
+
+            GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
+                data + start_index,
+                trend_window_size,  // Add 2 to ensure enough points for quadratic regression
+                0,
+                trend_window_size,
+                forgetting_factor
+            );
             
-            printf("\n");
+            
+             // Print max_sum values for both increasing and decreasing trends
+            printf("[analysis]--> Concavity analysis max_sum results:\n");
+            printf("Increase Trend max_sum: %.6f\n", gradient_trends.increase_info.max_sum);
+            printf("Decrease Trend max_sum: %.6f\n", gradient_trends.decrease_info.max_sum);
+
+            // Verify if the ON_PEAK condition should be set based on the increase max_sum
+            if (gradient_trends.increase_info.max_sum > 2.5) {
+                printf("[analysis]--> Increase Trend max_sum exceeds 2.5. Setting next direction to ON_PEAK.\n");
+                result.nextDirection = ON_PEAK;
+            }
+
             goto end_analysis;
+        } else {
+            printf("[analysis]--> Increase trend is not long enough for concavity analysis. Skipping this section.\n");
         }
     }
 
@@ -344,7 +368,6 @@ end_analysis:
     log_final_direction(result.nextDirection);
     return result;
 }
-
 
 
 /**
