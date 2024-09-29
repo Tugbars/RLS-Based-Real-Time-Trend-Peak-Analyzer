@@ -70,7 +70,7 @@ static uint8_t undecided_case_counter = 0;
  * will be reset when the `SWP_WAITING` state is entered, indicating that the system is ready for
  * a new session or sweep.
  */
-static bool undecided_error_flag = false;
+bool undecided_error_flag = false;
 
 /** @brief Maximum number of times the state machine can enter the undecided case within a session.
  *
@@ -243,10 +243,9 @@ static StateFuncs_t STATE_FUNCS[SWP_STATE_LAST] = {
  *
  * @param phaseAngles Pointer to the array of phase angles that are used in the analysis.
  */
-void SweepSampleCb(const double* phaseAngles) {
+static void SweepSampleCb(void) {
     if (buffer_update_info.needs_update) {
-        AdptSweepAddDataPoint(                                                    //MESSWEEPADDDATAPOINT YAPISINA UYMALI
-            phaseAngles,
+        AdptSweepAddDataPoint(                                                    
             buffer_update_info.phase_index_start,
             buffer_update_info.buffer_start_index,
             buffer_update_info.move_amount
@@ -278,12 +277,12 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
     // 0               -> Starting index in the phaseAngles array (this could be any index where you want to start the analysis)
     // 11300.0         -> Starting frequency for the frequency sweep (in Hz, e.g., starting at 11300 Hz)
     // 1.0             -> Frequency increment per step (in Hz, e.g., increment by 1 Hz for each data point)
-    int start_index = 162;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
-    init_buffer_manager(dataBuffer, BUFFER_SIZE, WINDOW_SIZE, start_index, 11300.0, 1.0);                                                    //START INDEX. START FREQUENCY - MY OWN THRESHOLD OLMALI. PEAK BURADAN HESAPLANACAK MESELA 11300 ISE PEAK 110'da CIKTIYSA 11410 olacak.
+    int start_index = 120;                                                                                                                    //START FREQUENCY  - MY OWN THRESHOLD. 
+    init_buffer_manager(dataBuffer, MQS_SWEEP_MAX_NUMBER_OF_SAMPLES, WINDOW_SIZE, start_index, 11300.0, 1.0);                                                    //START INDEX. START FREQUENCY - MY OWN THRESHOLD OLMALI. PEAK BURADAN HESAPLANACAK MESELA 11300 ISE PEAK 110'da CIKTIYSA 11410 olacak.
 
     // Debugging: Print initialization state
-    printf("[DEBUG] Buffer Manager initialized:\n");
-    printf("Buffer size: %d, Window size: %d, Start index: %d\n", BUFFER_SIZE, WINDOW_SIZE, start_index);
+    //printf("[DEBUG] Buffer Manager initialized:\n");
+    //printf("Buffer size: %d, Window size: %d, Start index: %d\n", BUFFER_SIZE, WINDOW_SIZE, start_index);
 }
 
 
@@ -297,9 +296,7 @@ static void initBufferManager(MqsRawDataPoint_t* dataBuffer) {
  * @param phase_angle_size Size of the phase angle array.
  * @param callback Function pointer to the callback function to be executed after analysis.
  */
-void startSlidingWindowAnalysis(MesSweep_t *sweep, const double* phaseAngles, uint16_t phase_angle_size, Callback_t callback) { //ILK MES START OLARAK GOREV ALABILIR. 
-    ctx.phaseAngles = phaseAngles;      //GEREK YOK.
-    ctx.phase_angle_size = phase_angle_size; //GEREK YOK. 
+void startSlidingWindowAnalysis(MesSweep_t *sweep, Callback_t callback) { //ILK MES START OLARAK GOREV ALABILIR. 
     ctx.callback = callback;
     ctx.isTruncatedLeft = false;
     ctx.isTruncatedRight = false;
@@ -382,7 +379,7 @@ static void OnEntryInitialAnalysis(void) {
     STATE_FUNCS[SWP_INITIAL_ANALYSIS].isComplete = true;
 
     // After setting up, we can perform the buffer update
-    SweepSampleCb(ctx.phaseAngles);
+    SweepSampleCb();
 }
 
 /**
@@ -423,11 +420,12 @@ static void OnEntrySegmentAnalysis(void) {
  * This function updates the buffer based on the determined direction from the segment analysis.
  */
 static void OnEntryUpdateBufferDirection(void) {
+    
     // Set up buffer update info
-    update_buffer_for_direction(ctx.phaseAngles, ctx.direction, buffer_manager.window_size / 2);
+    update_buffer_for_direction(ctx.direction, buffer_manager.window_size / 2);
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                              
+    SweepSampleCb();                                                                                              
 
     STATE_FUNCS[SWP_UPDATE_BUFFER_DIRECTION].isComplete = true;
     SwpProcessStateChange();  // Move to next state
@@ -451,13 +449,13 @@ static void OnEntryUndecidedTrendCase(void) {
     }
     
     if (ctx.direction == NEGATIVE_UNDECIDED) {
-        handle_negative_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);  // Move the window backward
+        handle_negative_undecided_case();  // Move the window backward
     } else {
-        handle_undecided_case(ctx.phaseAngles, ctx.phase_angle_size);  // Move the window forward
+        handle_undecided_case();  // Move the window forward
     }
 
     // After setting up, perform the buffer update if needed
-    SweepSampleCb(ctx.phaseAngles);                                                                                                  
+    SweepSampleCb();                                                                                                  
 
     STATE_FUNCS[SWP_UNDECIDED_TREND_CASE].isComplete = true;
     SwpProcessStateChange();
@@ -503,7 +501,7 @@ static void OnEntryUndecidedTrendCase(void) {
  * - The iterative adjustment helps ensure that the peak is centered by minimizing the total sum 
  *   of the second-order gradients, effectively handling any peak asymmetry.
  */
-double adjust_forgetting_factor(const double* buffer, uint16_t buffer_size, uint16_t start_index, 
+double adjust_forgetting_factor(const MqsRawDataPoint_t* buffer, uint16_t buffer_size, uint16_t start_index, 
                                 double* previous_gradient_sum, 
                                 uint8_t centering_attempts) 
 {
@@ -551,10 +549,12 @@ double adjust_forgetting_factor(const double* buffer, uint16_t buffer_size, uint
         if (fabs(total_gradient_sum) > fabs(*previous_gradient_sum)) {
             // If the new gradient sum is worse, decrease the forgetting factor
             centering_forgetting_factor -= 0.2;
+            
             if (centering_forgetting_factor < 0.1) {
                 // Ensure the factor does not go below a certain minimum (e.g., 0.1)
                 centering_forgetting_factor = 0.1;
             }
+            
             printf("Centering worsened, reducing forgetting factor to: %.2f\n", centering_forgetting_factor);
         } else {
             // If the new gradient sum is better, increase the forgetting factor
@@ -746,10 +746,10 @@ static void OnEntryPeakCentering(void) {
                 printf("Peak not centered. Attempt %d of %d\n", centering_attempts + 1, MAX_CENTERING_ATTEMPTS);
     
                 // Move the window and set up buffer update if necessary
-                move_window_and_update_if_needed(ctx.phaseAngles, direction, shift_amount);
+                move_window_and_update_if_needed( direction, shift_amount);
         
                 // After moving the window, perform buffer update if needed
-                SweepSampleCb(ctx.phaseAngles);                                                                                                    
+                SweepSampleCb();                                                                                                    
 
                 currentStatus.isCentered = 1;
 
@@ -809,7 +809,7 @@ static void OnEntryPeakCentering(void) {
  *
  * This function verifies the peak at the current buffer index and handles truncation cases.
  */ 
-static void OnEntryPeakFindingAnalysis(void) {                                                                                                 // yok 
+static void OnEntryPeakFindingAnalysis(void) {                                                                                                
     // Print the total second-order gradient sum again to verify the peak
     double total_gradient_sum = compute_total_second_order_gradient(
         buffer_manager.buffer,
@@ -853,7 +853,7 @@ static void OnEntryPeakFindingAnalysis(void) {                                  
                 centering_attempts = 0;
                 centering_forgetting_factor = 0.7; // Reset the forgetting factor
                 
-                print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval    
+                print_analysis_interval();  // Print the buffer interval    
                 currentStatus.isSweepDone = 1;  // Mark the sweep as done
             } else {
                 printf("Peak verification failed, returning to peak centering.\n");
@@ -928,18 +928,18 @@ static void OnEntryPeakTruncationHandling(void) {
 
     if (ctx.isTruncatedLeft) {
         printf("Handling truncation on the left side.\n");
-        move_window_and_update_if_needed(ctx.phaseAngles, LEFT_SIDE, 5);
+        move_window_and_update_if_needed(LEFT_SIDE, 5);
 
         // Perform buffer update if needed
-        SweepSampleCb(ctx.phaseAngles);
+        SweepSampleCb();
     }
 
     if (ctx.isTruncatedRight) {
         printf("Handling truncation on the right side.\n");
-        move_window_and_update_if_needed(ctx.phaseAngles, RIGHT_SIDE, 5);
+        move_window_and_update_if_needed(RIGHT_SIDE, 5);
 
         // Perform buffer update if needed
-        SweepSampleCb(ctx.phaseAngles);
+        SweepSampleCb();
     }
 
     // Don't mark the state complete here since we will evaluate the outcome in OnExit
@@ -1000,7 +1000,7 @@ static void OnExitPeakTruncationHandling(void) {
     bool peak_verified_after_truncation = verify_peak_at_index(buffer_manager.current_buffer_index);
     if (peak_verified_after_truncation) {
         printf("Peak verification successful after truncation handling, peak is centered.\n");
-        print_analysis_interval(ctx.phaseAngles, ctx.phase_angle_size);  // Print the buffer interval
+        print_analysis_interval();  // Print the buffer interval
         currentStatus.isSweepDone = 1;  // Mark the sweep as done
         // Now the state is ready to transition, mark it complete
 

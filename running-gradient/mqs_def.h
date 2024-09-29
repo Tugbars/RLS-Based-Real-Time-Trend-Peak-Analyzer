@@ -10,6 +10,8 @@
 
 #define MAX_ATTEMPTS 3
 
+#define MQS_SWEEP_MAX_NUMBER_OF_SAMPLES 401
+
 #include <stdint.h>
 
 typedef struct {

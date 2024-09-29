@@ -76,47 +76,52 @@ void init_buffer_manager(
     double frequency_increment
 );
 
+
 /**
  * @brief Loads the initial window of phase angle data into the buffer.
- *
- * @param phaseAngles      Pointer to the array of phase angles.
- * @param phase_angle_size Size of the phase angle array.
  */
-void load_initial_buffer(const double* phaseAngles, uint16_t phase_angle_size);
-
+void load_initial_buffer(void);
 
 /**
  * @brief Updates the buffer to shift the analysis window in a specified direction.
  *
- * @param phaseAngles Pointer to the array of phase angles used in the analysis.
  * @param direction   Direction to move the buffer window. Accepts `LEFT_SIDE` or `RIGHT_SIDE`.
  * @param move_amount The number of positions to move the buffer window in the specified direction.
  */
-void update_buffer_for_direction(const double* phaseAngles, int direction, int move_amount);
-
-void handle_negative_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
+void update_buffer_for_direction(int direction, int move_amount);
 
 /**
  * @brief Handles the case when the segment analysis result is undecided.
- *
- * @param phaseAngles      Pointer to the array of phase angles.
- * @param phase_angle_size The total size of the phase angle array.
  */
-void handle_undecided_case(const double* phaseAngles, uint16_t phase_angle_size);
+void handle_undecided_case(void);
 
-void move_window_and_update_if_needed(const double* phaseAngles, int direction, int move_amount);
+/**
+ * @brief Handles the case when the segment analysis result is negative undecided.
+ */
+void handle_negative_undecided_case(void);
 
-void perform_buffer_update_if_needed(const double* phaseAngles);
+/**
+ * @brief Moves the analysis window by a specified number of positions left or right and updates the buffer only if necessary.
+ */
+void move_window_and_update_if_needed(int direction, int move_amount);
 
-void print_analysis_interval(const double* phaseAngles, int total_size);
+/**
+ * @brief Performs a buffer update if one is required.
+ */
+void perform_buffer_update_if_needed(void);
+
+/**
+ * @brief Prints the values within the tracked interval of phase indices from the beginning to the end.
+ */
+void print_analysis_interval(void);
 
 /**
  * @brief Updates the buffer with phaseAngle values and optionally sets impedance.
  *
- * @param phaseAngles        Pointer to the array of phase angles.
  * @param phase_index_start  The starting index of the phase angles to update from.
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
+ * @param move_amount        The number of positions to move the buffer window.
  */
-void  AdptSweepAddDataPoint(const double* phaseAngles, int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
+void AdptSweepAddDataPoint(int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
 
 #endif // BUFFER_MANAGER_H

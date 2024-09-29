@@ -2,6 +2,7 @@
 #define MES_BUFFERS_H
 
 #include "mqs_def.h"
+#include "stdlib.h"
 
 typedef struct {
 	const MqsRawDataSweep_t* setup;
@@ -22,6 +23,10 @@ extern MqsRawDataSet_t* filterData;
 extern MesSweep_t filterBaseSweep;
 extern MesSweep_t filterAfterExposureSweep;
 extern MesSweep_t* currentFilterSweep;
+
+// Declare external access to phaseAngles
+extern const double phaseAngles[];    // Declare phaseAngles as an external variable
+extern size_t phase_angle_size;       // Declare the size as external too
 
 void MesSweepApplySetupDefaults(MqsRawDataSweep_t* const setup);
 void MesSweepSetupAndClear(MesSweep_t* const sweep, const MqsRawDataSweep_t* const setup, MqsRawDataPoint_t* const data);
