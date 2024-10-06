@@ -9,6 +9,10 @@
 #include "rls_analysis_parameters.h"
 #include "buffer_manager.h"
 
+#define QUADRATIC_GRADIENT_THRESHOLD 2.5f
+
+#define SIGNIFICANT_TREND_COUNT 5
+
 /**a
  * @brief Determines the directional trend within a given window based on the analysis of peak trends.
  *
@@ -52,22 +56,16 @@
  */
 static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResult *trends, uint16_t window_cubic, uint16_t start_cubic_index) {
     TrendDirectionFlags flags = {false, false, false, true, false, false, false}; // Initialize with on_the_peak
-
-    //printf("Window start index: %u, Window size: %u\n", start_cubic_index, window_cubic);
-
     double average_increase = 0.0;
     double average_decrease = 0.0;
     uint16_t increase_duration = 0;
     uint16_t decrease_duration = 0;
 
     // Check for significant increasing trend
-    if (trends->significant_increase) { // TODO: SIGNIFICANT INCREASE THRESHOLDS SHOULD BE CHECKED 
+    if (trends->significant_increase) {
         increase_duration = trends->increase_info.end_index - trends->increase_info.start_index;
         average_increase = trends->increase_info.max_sum / (double)increase_duration;
 
-        //printf("Significant increase detected. Increase end index: %u\n", trends->increase_info.end_index);
-        //printf("Average Increase: %.6f over interval [%u - %u]\n", average_increase, trends->increase_info.start_index, trends->increase_info.end_index);
-        
          // Use the parameters from peak_analysis_params instead of hardcoded values
         if (increase_duration > peak_analysis_params.min_consistent_trend_count && average_increase > peak_analysis_params.min_average_increase + 2) { // +2 FOR SAFETY. 
             flags.on_the_peak = true;
@@ -98,9 +96,6 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         decrease_duration = trends->decrease_info.end_index - trends->decrease_info.start_index;
         average_decrease = trends->decrease_info.max_sum / (double)decrease_duration;
 
-        //printf("Significant decrease detected. Decrease start index: %u\n", trends->decrease_info.start_index);
-        //printf("Average Decrease: %.6f over interval [%u - %u]\n", average_decrease, trends->decrease_info.start_index, trends->decrease_info.end_index);
-
         // Use the parameters from peak_analysis_params instead of hardcoded values
         if (decrease_duration > peak_analysis_params.min_consistent_trend_count || average_decrease < peak_analysis_params.min_average_decrease) {
             flags.go_to_left = true;
@@ -124,7 +119,6 @@ static TrendDirectionFlags determine_trend_direction(const PeakTrendAnalysisResu
         printf("On the peak detected. Flags set: on_the_peak.\n");
     }
 
-    //printf("Trend direction determination complete.\n");
     return flags;
 }
 
@@ -137,14 +131,10 @@ void log_peak_detection(bool on_peak) {
 void log_direction_determined(int direction) {
     switch (direction) {
         case RIGHT_SIDE:
-            //printf("--> Direction determined: RIGHT_SIDE.\n");
-            break;
-        case LEFT_SIDE:
-            //printf("--> Direction determined: LEFT_SIDE.\n");
-            break;
+        case LEFT_SIDE:   
         case ON_PEAK:
-            //printf("--> Direction determined: ON_PEAK.\n");
-            break;
+         
+        break;
         case UNDECIDED:
         default:
             printf("--> Direction determined: UNDECIDED.\n");
@@ -260,7 +250,7 @@ void log_final_direction(int nextDirection) {
  * @return SegmentAnalysisResult A structure containing information about the direction to move (left, right, undecided),
  *         whether a potential or true peak was found, and the detected concavity pattern.
  */
-SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t window_size, double forgetting_factor) {
+SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     
     SegmentAnalysisResult result = {
         .isPotentialPeak = false,
@@ -277,9 +267,8 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
     };
 
     printf("[analysis]-->Cubic regression increase/decrease...\n");
-    PeakTrendAnalysisResult significant_trends = detect_significant_gradient_trends(data, window_size, 0, CUBIC_RLS_WINDOW, forgetting_factor);
-
-    TrendDirectionFlags direction_flags = determine_trend_direction(&significant_trends, window_size, 0);
+    PeakTrendAnalysisResult significant_trends = detect_significant_gradient_trends(data, window_size, start_index, CUBIC_RLS_WINDOW, forgetting_factor);  //this is slightly a better way to capture a trend. 
+    TrendDirectionFlags direction_flags = determine_trend_direction(&significant_trends, window_size, start_index); //CALL
 
     // Check if we are on the peak
     if (direction_flags.on_the_peak) {
@@ -308,8 +297,8 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
     // Check if far from peak, compare the left and right parts of the window
     if (direction_flags.far_to_peak) {
         
-        printf("[analysis]--> compare gradient parts.\n");
-        GradientComparisonResult gradient_result = compare_gradient_parts(data, 0, forgetting_factor); 
+        printf("[analysis]--> compare gradient parts.\n"); //this is not a very accurate way to capture the trend. It can only work in completely symmetrical peak curves where left is equal to right side of the curve. 
+        GradientComparisonResult gradient_result = compare_gradient_parts(data, start_index, forgetting_factor); //CALL
         log_gradient_comparison(gradient_result);
         
         printf("\n");
@@ -323,38 +312,36 @@ SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint
 
     } else {
 concavity_analysis:
-        //printf("[analysis]--> Performing concavity analysis...\n");
+        // this is necessary because if the RLS starts from very left side of the window where the actual peak is present, RLS may oversmoothen the data significantly and the total gradient increase may be too low to be considered as significant.
+        // isolating where the peak starts and ends and checking its concavity allows us to see what's going on during the gradient increase a bit more carefully. Just checking in the interval where the consistent peak increase is happening and fitting it to quadratic polynomial minimizes RLS oversmoothening while telling the overall trend in that area 
+        // and if such increase can label the analyzed window as a window where the peak should be. 
+        printf("[analysis]--> Performing concavity analysis...\n"); 
 
         // Check if the increase trend is longer than 8 indices
         uint16_t increase_trend_length = significant_trends.increase_info.end_index - significant_trends.increase_info.start_index;
-        if (significant_trends.significant_increase && increase_trend_length > 5) {
-            //printf("[analysis]--> Increase trend is longer than 8 indices (%u). Performing concavity analysis on increase trend.\n", increase_trend_length);
-             printf("\n");
+        
+        if (significant_trends.significant_increase && increase_trend_length > SIGNIFICANT_TREND_COUNT) { //MAGIC NUMBER : / 
+
+            printf("\n");
             // Perform concavity analysis on the increase trend
-            uint16_t start_index = significant_trends.increase_info.start_index;
+            uint16_t trend_start_index = significant_trends.increase_info.start_index;
             uint16_t trend_window_size = increase_trend_length;
             
-            // Debugging print statements for start_index and trend_window_size
-            printf("[debug] Start index for concavity analysis: %u\n", start_index);
-            printf("[debug] Trend window size for concavity analysis: %u\n", trend_window_size);
-
-            GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression(
-                data + start_index,
-                trend_window_size,  // Add 2 to ensure enough points for quadratic regression
+            GradientTrendResult gradient_trends = track_gradient_trends_with_quadratic_regression( //CALL
+                data + trend_start_index,
+                trend_window_size,  
                 0,
                 trend_window_size,
                 forgetting_factor
             );
             
-            
              // Print max_sum values for both increasing and decreasing trends
-            printf("[analysis]--> Concavity analysis max_sum results:\n");
             printf("Increase Trend max_sum: %.6f\n", gradient_trends.increase_info.max_sum);
             printf("Decrease Trend max_sum: %.6f\n", gradient_trends.decrease_info.max_sum);
 
             // Verify if the ON_PEAK condition should be set based on the increase max_sum
-            if (gradient_trends.increase_info.max_sum > 2.5) {
-                printf("[analysis]--> Increase Trend max_sum exceeds 2.5. Setting next direction to ON_PEAK.\n");
+            if (gradient_trends.increase_info.max_sum > QUADRATIC_GRADIENT_THRESHOLD) {
+                //printf("[analysis]--> Increase Trend max_sum exceeds 2.5. Setting next direction to ON_PEAK.\n");
                 result.nextDirection = ON_PEAK;
             }
 
@@ -393,20 +380,8 @@ bool verify_peak_at_index(uint16_t buffer_start_index) {
         0.5                      // Forgetting factor for RLS analysis
     );
 
-    // Debugging: Print out the results from the find_and_verify_quadratic_peak function
-    //printf("[verify_peak_at_index] Peak result:\n");
-    //printf("  peak_found: %d\n", peak_result.peak_found);
-    //printf("  peak_index: %d\n", peak_result.peak_index);
-    //printf("  is_truncated_left: %d\n", peak_result.is_truncated_left);
-    //printf("  is_truncated_right: %d\n", peak_result.is_truncated_right);
-
     // If a peak is found, adjust the peak index to match the real phaseAngle array
     if (peak_result.peak_found) {
-        // Debugging: Print current buffer and phase information
-        //printf("[verify_peak_at_index] Debugging current buffer state:\n");
-        //printf("  buffer_manager.current_phase_index: %d\n", buffer_manager.current_phase_index);
-        //printf("  buffer_start_index: %d\n", buffer_start_index);
-        //printf("  peak_result.peak_index: %d\n", peak_result.peak_index);
 
         // Adjust the peak index to match the real phaseAngle array
         uint16_t real_peak_index = buffer_manager.current_phase_index + (peak_result.peak_index);

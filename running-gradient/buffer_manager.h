@@ -13,8 +13,6 @@
 #include "mqs_def.h"  // Assuming this contains the definition for MqsRawDataPoint_t
 #include "running_quadratic_gradient.h"  // For QuadraticPeakAnalysisResult
 
-/** @brief Define the buffer size for the sliding window analysis. */
-#define BUFFER_SIZE 200
 //#define BUFFER_DEBUG
 
 // Global indices for tracking analysis window
@@ -122,6 +120,6 @@ void print_analysis_interval(void);
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
  * @param move_amount        The number of positions to move the buffer window.
  */
-void AdptSweepAddDataPoint(int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
+void AdptSweepAddDataPoint(double real, double imaginary);
 
 #endif // BUFFER_MANAGER_H

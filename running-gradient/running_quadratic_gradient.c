@@ -291,7 +291,6 @@ void add_quadratic_data_point(RunningQuadraticGradient *const rg, const MqsRawDa
     if (condition_number > 1e8) {
         // Reset the inverse covariance matrix if condition number is too high
         init_inverse_covariance_matrix(rg);
-        //printf("Resetting inverse covariance matrix due to high condition number: %.2e\n", condition_number);
     }
 }
 
@@ -579,13 +578,8 @@ double compute_total_second_order_gradient(
             // Accumulate the weighted sum of gradients
             total_weighted_sum_gradients += weight * second_order_gradient;
 
-            // Optionally, print the weight and the weighted gradient
-            // printf("Second-order gradient: %.6f, Weight: %.6f, Weighted Gradient: %.6f\n",
-            //        second_order_gradient, weight, weight * second_order_gradient);
         } else {
-            // Handle the case when not enough data points are available for stable gradient calculation
-            // printf("Not enough data points to calculate a stable gradient after adding phase angle %.6f.\n",
-            //        current_value->phaseAngle);
+           //do nothing
         }
     }
 
@@ -805,12 +799,6 @@ GradientTrendIndices find_consistent_decrease_in_second_order(double *gradients,
 GradientTrendResult track_gradient_trends_with_quadratic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
     GradientTrendResult trend_result = {0};  // Initialize the struct with default values
     
-    //printf("-- -track_gradient_trends_with_quadratic_regression called with arguments:\n");
-    //printf("  length: %u\n", length);
-    //printf("  start_index: %u\n", start_index);
-    //printf("  window_size: %u\n", window_size);
-    //printf("  forgetting_factor: %.6f\n", forgetting_factor);
-
     // Ensure that the start index and the window size allow for calculations
     if (start_index + window_size > length) {
         #ifdef DEBUG_QUADRATIC

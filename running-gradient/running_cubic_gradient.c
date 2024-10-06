@@ -588,13 +588,8 @@ GradientTrendIndices find_consistent_decrease(double *gradients, size_t start_in
  *   - If the cumulative sum is greater than the previous maximum sum, it updates the maximum cumulative sum and marks the trend as valid.
  */
 GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawDataPoint_t *values, uint16_t length, uint16_t start_index, uint16_t window_size, double forgetting_factor) {
+    
     GradientTrendResult trend_result = {0}; // Initialize the struct with default values
-
-    // Ensure that the start index and the window size allow for calculations
-    if (start_index + window_size > length) {
-        printf("Insufficient data to compute first-order gradients for the specified window size.\n");
-        return trend_result;
-    }
 
     // Array to store the first-order gradients
     double first_order_gradients[window_size];
@@ -616,26 +611,15 @@ GradientTrendResult track_gradient_trends_with_cubic_regression(const MqsRawData
             double x_current = (double)(rg.num_points - 1);  // Current x value
             double first_order_gradient = calculate_first_derivative(&rg, x_current);
             first_order_gradients[i] = first_order_gradient;
-
-            // Debugging: Print the calculated first-order gradient
-            //printf("Calculated first-order gradient at index %u: %.6f\n", current_index, first_order_gradient);
         } else {
             first_order_gradients[i] = NAN; // Not enough points yet to calculate the gradient
-            // Debugging: Print a message indicating insufficient data points
-           // printf("Not enough data points to calculate the gradient at index %u.\n", current_index);
+
         }
     }
-
-    // Debugging: Print a message before finding consistent increase
-    //printf("Finding consistent increase...\n");
 
     // Find the consistent increase trend
     trend_result.increase_info = find_consistent_increase(first_order_gradients, start_index, window_size);
 
-    // Debugging: Print a message before finding consistent decrease
-    //printf("Finding consistent decrease...\n");
-
-    // Find the consistent decrease trend
     trend_result.decrease_info = find_consistent_decrease(first_order_gradients, start_index, window_size);
 
     return trend_result;
@@ -686,13 +670,11 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
     // Calculate average increase if a valid increase trend is detected
     if (trend_result.increase_info.valid) {
         double sum_of_gradients = trend_result.increase_info.max_sum;
-        //printf("[DEBUG] Sum of gradients (increase max_sum): %.6f\n", sum_of_gradients);
         
         uint16_t index_difference = trend_result.increase_info.end_index - trend_result.increase_info.start_index;
-        //printf("[DEBUG] Index difference (increase end_index - start_index): %u\n", index_difference);
+     
         
         average_increase = sum_of_gradients / (double)index_difference;
-        //printf("[DEBUG] Average increase (sum_of_gradients / index_difference): %.6f\n", average_increase);
 
         // Evaluate significance based on global threshold and new average conditions
         bool is_large_gradient = (sum_of_gradients > significance_threshold);
@@ -708,13 +690,10 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
     // Calculate average decrease if a valid decrease trend is detected
     if (trend_result.decrease_info.valid) {
         double sum_of_gradients = trend_result.decrease_info.max_sum;
-        //printf("[DEBUG] Sum of gradients (max_sum): %.6f\n", sum_of_gradients);
         
         uint16_t index_difference = trend_result.decrease_info.end_index - trend_result.decrease_info.start_index;
-        //printf("[DEBUG] Index difference (end_index - start_index): %u\n", index_difference);
         
         average_decrease = sum_of_gradients / (double)index_difference;
-        //printf("[DEBUG] Average decrease (sum_of_gradients / index_difference): %.6f\n", average_decrease);
 
         // Define meaningful variable names for readability
         bool is_significant_gradient_sum = (sum_of_gradients < -significance_threshold);
@@ -728,10 +707,6 @@ PeakTrendAnalysisResult detect_significant_gradient_trends(const MqsRawDataPoint
             result.significant_decrease = true;
         }
     }
-
-    // Debugging: Print the final result summary
-    // printf("Trend detection complete. Significant Increase: %s, Significant Decrease: %s\n",
-    //       result.significant_increase ? "Yes" : "No", result.significant_decrease ? "Yes" : "No");
 
     if (trend_result.increase_info.valid) {
         printf("Average Increase: %.6f over interval [%u - %u]\n", 

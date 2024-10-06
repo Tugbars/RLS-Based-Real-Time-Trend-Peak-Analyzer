@@ -32,7 +32,7 @@ typedef struct {
  * @param forgetting_factor Forgetting factor that determines the weight of newer data points
  * @return SegmentAnalysisResult Structure containing information about the detected trends and concavity pattern
  */
-SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t window_size, double forgetting_factor);
+SegmentAnalysisResult segment_trend_and_concavity_analysis(const MqsRawDataPoint_t *data, uint16_t start_index, uint16_t window_size, double forgetting_factor);
 
 bool verify_peak_at_index(uint16_t buffer_start_index);
 

@@ -181,12 +181,6 @@ void add_data_point(RunningGradient *const rg, const MqsRawDataPoint_t *data_poi
                         (x[0] * rg->inverse_cov_matrix[0][0] + x[1] * rg->inverse_cov_matrix[1][0]) * x[0] +
                         (x[0] * rg->inverse_cov_matrix[0][1] + x[1] * rg->inverse_cov_matrix[1][1]) * x[1];
 
-    // Check for numerical stability
-    if (fabs(temp) < 1e-10) {
-        fprintf(stderr, "Numerical stability issue: temp is too close to zero.\n");
-        exit(EXIT_FAILURE);
-    }
-
     // Calculate the temporary vector used for updating the inverse covariance matrix
     const double tmp[2] = { rg->inverse_cov_matrix[0][0] * x[0] + rg->inverse_cov_matrix[0][1] * x[1],
                             rg->inverse_cov_matrix[1][0] * x[0] + rg->inverse_cov_matrix[1][1] * x[1] };
@@ -360,11 +354,13 @@ double calculate_probability(RunningGradient *rg) {
  */
 void process_gradient(RunningGradient *rg, const MqsRawDataPoint_t *data, uint16_t start_index, uint16_t end_index, 
                       double *total_gradient, uint16_t *increase_count) {
-    for (uint16_t i = start_index; i < end_index; ++i) {
+    for (int i = start_index; i < end_index; ++i) {
         add_data_point(rg, &data[i]);
 
         if (rg->num_points > 1) {  // Ensure we have enough points to calculate a gradient
             double gradient = calculate_gradient(rg);
+            //printf("[process_gradient] Data index: %d, Gradient: %.6f and the data: %f\n", i, gradient, data[i].phaseAngle); //0 sonuncu sayıyı gösteriypr niye bilmiyorum. 
+
             *total_gradient += gradient;
 
             if (gradient > gradient_analysis_params.gradient_threshold) {  // Use globally defined threshold
@@ -430,6 +426,7 @@ PeakPosition determine_dominant_side(const GradientComparisonResult *result) {
  *                                  increase counts, probabilities, and the dominant side.
  */
 GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, uint16_t start_index, double forgetting_factor) {
+    
     GradientComparisonResult result = {0.0, 0.0, 0, 0, 0.0, 0.0, UNDECIDED};
     
     RunningGradient rg_left_part, rg_right_part;
@@ -437,21 +434,32 @@ GradientComparisonResult compare_gradient_parts(const MqsRawDataPoint_t *data, u
     init_running_gradient(&rg_right_part, forgetting_factor);
 
     uint16_t middle_index = start_index + WINDOW_SIZE / 2;  // Middle of the window
+    
+     // Process the left side (first part)
+    printf("Processing the left side (first part) from %u to %u, starting at index %u...\n", 
+           middle_index - (WINDOW_SIZE / 2), middle_index, start_index);
 
-    // Process the left side (first part)
-    //printf("Processing the left side (first part) from %u to %u...\n", middle_index - (WINDOW_SIZE / 2), middle_index);
-    process_gradient(&rg_left_part, data, middle_index - (WINDOW_SIZE / 2), middle_index, 
-                     &result.total_gradient_first_part, &result.increase_count_first_part);
+    process_gradient(&rg_left_part, 
+    data, 
+    middle_index - (WINDOW_SIZE / 2), 
+    middle_index, 
+    &result.total_gradient_first_part, 
+    &result.increase_count_first_part);
     //result.probability_increase_first_part = calculate_probability(&rg_left_part);
 
     // Process the right side (second part)
-    //printf("Processing the right side (second part) from %u to %u...\n", middle_index, middle_index + (WINDOW_SIZE / 2));
-    process_gradient(&rg_right_part, data, middle_index, middle_index + (WINDOW_SIZE / 2), 
-                     &result.total_gradient_second_part, &result.increase_count_second_part);
+    printf("Processing the right side (second part) from %u to %u, starting at index %u...\n", 
+           middle_index, middle_index + (WINDOW_SIZE / 2), start_index);
+  
+    process_gradient(&rg_right_part, 
+    data, 
+    middle_index, 
+    middle_index + (WINDOW_SIZE / 2), 
+    &result.total_gradient_second_part, 
+    &result.increase_count_second_part);
     //result.probability_increase_second_part = calculate_probability(&rg_right_part);
 
     // Compare the results to determine the dominant side
-    //printf("Comparing the results...\n");
     result.dominant_side = determine_dominant_side(&result);
 
     switch (result.dominant_side) {

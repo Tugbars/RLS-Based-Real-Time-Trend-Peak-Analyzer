@@ -24,12 +24,12 @@ int analysis_end_index = -1;    // Track the final end index
 int buffer_shift_offset = 0;  // New global variable to track the shift relative to the buffer.
 
 // Function prototypes
-void AdptSweepAddDataPoint(int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount);
+void AdptSweepAddDataPoint(double real, double imaginary);
 
 /**
  * @brief Initializes the BufferManager struct with starting values.
  *
- * This function sets up the buffer manager by initializing its buffer, buffer size, window size, 
+ * This function sets up the buffer manager by initializing its buffer, buffer size, window size,
  * current phase index, and frequency parameters. The buffer index is set to the middle of the buffer.
  *
  * @param buffer A pointer to the phase data buffer to be managed.
@@ -52,32 +52,26 @@ void init_buffer_manager(
     double start_frequency,
     double frequency_increment
 ) {
-    buffer_manager.buffer = buffer_ptr;
-    buffer_manager.buffer_size = buffer_size;
-    buffer_manager.window_size = window_size;
-    buffer_manager.current_phase_index = start_index;  // Starting phase index
-    buffer_manager.current_buffer_index = buffer_size / 2; // Start from the middle of the buffer
+	buffer_manager.buffer = buffer_ptr;
+	buffer_manager.buffer_size = buffer_size;
+	buffer_manager.window_size = window_size;
+	buffer_manager.current_phase_index = start_index;  // Starting phase index
+	buffer_manager.current_buffer_index = buffer_size / 2; // Start from the middle of the buffer
 
-    buffer_manager.mapping_start_index = start_index;
-    buffer_manager.mapping_end_index = start_index + window_size - 1;
+	buffer_manager.mapping_start_index = start_index;
+	buffer_manager.mapping_end_index = start_index + window_size - 1;
 
-    buffer_manager.start_frequency = start_frequency;
-    buffer_manager.frequency_increment = frequency_increment;
+	buffer_manager.start_frequency = start_frequency;
+	buffer_manager.frequency_increment = frequency_increment;
 
-    // Initialize the analysis tracking variables
-    if (analysis_start_index == -1) {  // Set the initial start index only once at the beginning
-        analysis_start_index = start_index;
-    }
+	// Initialize the analysis tracking variables
+	if (analysis_start_index == -1) {  // Set the initial start index only once at the beginning
+		analysis_start_index = start_index;
+	}
 
-    // Set the initial end index (will be updated dynamically)
-    analysis_end_index = start_index + window_size - 1;
-    buffer_shift_offset = 0;
-
-    #ifdef BUFFER_DEBUG
-    //printf("[init_buffer_manager] Buffer Manager initialized:\n");
-    //printf("Buffer size: %d, Window size: %d, Start index: %d\n", buffer_size, window_size, start_index);
-    //printf("Start frequency: %.2f Hz, Frequency increment: %.2f Hz\n", start_frequency, frequency_increment);
-    #endif
+	// Set the initial end index (will be updated dynamically)
+	analysis_end_index = start_index + window_size - 1;
+	buffer_shift_offset = 0;
 }
 
 /**
@@ -87,34 +81,26 @@ void init_buffer_manager(
  *
  */
 void load_initial_buffer(void) {
-    #ifdef BUFFER_DEBUG
-    printf("[load_initial_buffer] Loading initial window of data into the buffer.\n");
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[load_initial_buffer] Loading initial window of data into the buffer.\n");
+#endif
 
-    // Use AdptSweepAddDataPoint to load the initial window of data
-    AdptSweepAddDataPoint(buffer_manager.current_phase_index, buffer_manager.current_buffer_index, buffer_manager.window_size);  // Pass the full window size as move_amount
+	// Prepare buffer update information for adaptive sweep
+	buffer_update_info.needs_update = true;
+	buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
+	buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
+	buffer_update_info.move_amount = buffer_manager.window_size;
 
-    // Ensure that phase indices are within bounds after updating
-    for (uint16_t i = 0; i < buffer_manager.window_size; ++i) {
-        int16_t phase_index = buffer_manager.current_phase_index + i;
-        if (phase_index >= phase_angle_size || phase_index < 0) {
-            int16_t buffer_index = (buffer_manager.current_buffer_index + i) % buffer_manager.buffer_size;
-            buffer_manager.buffer[buffer_index].phaseAngle = 0.0; // Set out-of-bounds phase angle to 0.0
-        }
-    }
+	// Update the global analysis indices
+	if (analysis_start_index == -1) { // Set the start index only if it hasn't been set yet
+		analysis_start_index = buffer_manager.current_phase_index;
+	}
+	analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
 
-    // Update the global analysis indices
-    if (analysis_start_index == -1) { // Set the start index only if it hasn't been set yet
-        analysis_start_index = buffer_manager.current_phase_index;
-    }
-
-    // The end index is always the start index + window size - 1 after loading the initial window
-    analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
-
-    #ifdef BUFFER_DEBUG
-    printf("[load_initial_buffer] Initial buffer loading complete.\n");
-    printf("[BUFFER] Analysis start index set to %d, end index set to %d\n", analysis_start_index, analysis_end_index);
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[load_initial_buffer] Initial buffer setup complete.\n");
+	printf("[BUFFER] Analysis start index set to %d, end index set to %d\n", analysis_start_index, analysis_end_index);
+#endif
 }
 
 /**
@@ -126,28 +112,27 @@ void load_initial_buffer(void) {
  * @param phase_index_start The starting index of the phase angles to update from.
  * @param buffer_start_index The starting index of the buffer where the phase angles will be stored.
  */
-void AdptSweepAddDataPoint(int16_t phase_index_start, int16_t buffer_start_index, uint16_t move_amount) {
-    // Loop to update the buffer with new phaseAngle values
-    for (uint16_t i = 0; i < move_amount; ++i) {
-        int16_t phase_index = phase_index_start + i;
-        int16_t buffer_index = (buffer_start_index + i) % buffer_manager.buffer_size;
+void AdptSweepAddDataPoint(double real, double imaginary) {
+    
+      // Determine the current buffer index (where the data will be stored)
+    int16_t buffer_index = buffer_update_info.buffer_start_index;
+    
+    // The real part corresponds to the phaseAngle in our simulation,
+    // but in the real system, this would be computed from the AD5933's real/imaginary output.
 
-        // Debugging: Log the details of buffer update before actual update
-        #ifdef BUFFER_DEBUG
-        printf("[AdptSweepAddDataPoint] [DEBUG] Before update -> Buffer index: %d, Phase index: %d, PhaseAngle: %.6f\n",
-               buffer_index, phase_index, phaseAngles[phase_index]);
-        #endif
+    // Use 'real' (simulated phaseAngle) directly in the buffer
+    buffer_manager.buffer[buffer_index + currentRawSweep->count].phaseAngle = real;
 
-        // Copy phaseAngle and optionally set impedance
-        buffer_manager.buffer[buffer_index].phaseAngle = phaseAngles[phase_index];
-        //buffer_manager.buffer[buffer_index].impedance = 0.0; // Mock impedance, update if needed
-
-        // Debugging: Log the update in the buffer
-        #ifdef BUFFER_DEBUG
-        printf("[AdptSweepAddDataPoint] Buffer updated at phase index %d with phaseAngle %.6f (buffer index: %d)\n",
-               phase_index, phaseAngles[phase_index], buffer_index);
-        #endif
-    }
+    // Simulate impedance or calculate from 'imaginary' if necessary
+    buffer_manager.buffer[buffer_index].impedance = imaginary;  // In real code, this would be calculated
+    
+    currentRawSweep->count++;
+    
+#ifdef BUFFER_DEBUG
+    // Additional debug logging if BUFFER_DEBUG is enabled
+    printf("[AdptSweepAddDataPoint] Detailed debug -> PhaseAngle = %.6f, Impedance = %.6f (buffer index: %d)\n",
+           real, imaginary, buffer_index);
+#endif
 }
 
 /**
@@ -198,96 +183,90 @@ void AdptSweepAddDataPoint(int16_t phase_index_start, int16_t buffer_start_index
  * @see buffer_manager
  */
 void update_buffer_for_direction(int direction, int move_amount) {
-    int16_t buffer_start_index;
-    int16_t phase_index_start;
+	int16_t buffer_start_index;
+	int16_t phase_index_start;
 
-    // Log initial indices before movement
-    #ifdef BUFFER_DEBUG
-    printf("[update_buffer_for_direction] Initial phase index start: %d, buffer start index: %d, move amount: %d\n",
-           buffer_manager.current_phase_index, buffer_manager.current_buffer_index, move_amount);
-    #endif
+	// Log initial indices before movement
+#ifdef BUFFER_DEBUG
+	printf("[update_buffer_for_direction] Initial phase index start: %d, buffer start index: %d, move amount: %d\n",
+	       buffer_manager.current_phase_index, buffer_manager.current_buffer_index, move_amount);
+#endif
 
-    if (direction == LEFT_SIDE) {
-        // Moving left
-        phase_index_start = buffer_manager.current_phase_index - move_amount;
-        buffer_start_index = buffer_manager.current_buffer_index - move_amount;
+	if (direction == LEFT_SIDE) {
+		// Moving left
+		phase_index_start = buffer_manager.current_phase_index - move_amount;
+		buffer_start_index = buffer_manager.current_buffer_index - move_amount;
 
-        // Check if the buffer indices are out of bounds
-        if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
-            printf("[update_buffer_for_direction] Buffer index out of bounds. Setting error flag.\n");
-            set_boundary_error_flag(1);  // Set the boundary error flag
-            return;  // Exit the function to stop further processing
-        }
+		// Check if the buffer indices are out of bounds
+		if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
+			printf("[update_buffer_for_direction] Buffer index out of bounds. Setting error flag.\n");
+			set_boundary_error_flag(1);  // Set the boundary error flag
+			return;  // Exit the function to stop further processing
+		}
 
-        if (buffer_start_index < 0) {
-            buffer_start_index += buffer_manager.buffer_size;
-        }
+		if (buffer_start_index < 0) {
+			buffer_start_index += buffer_manager.buffer_size;
+		}
 
-        // Debugging: Log the movement and new indices
-        //#ifdef BUFFER_DEBUG
-        printf("[update_buffer_for_direction] Moving left by %d. New phase index start: %d, new buffer start index: %d\n",
-               move_amount, phase_index_start, buffer_start_index);
-        //#endif
+		printf("[update_buffer_for_direction] Moving left by %d. New phase index start: %d, new buffer start index: %d\n",
+		       move_amount, phase_index_start, buffer_start_index);
 
-        // Update indices
-        buffer_manager.current_phase_index = phase_index_start;
-        buffer_manager.current_buffer_index = buffer_start_index;
 
-        // Update analysis start index if necessary
-        if (phase_index_start < analysis_start_index) {
-            analysis_start_index = phase_index_start;
-        }
+		// Update indices
+		buffer_manager.current_phase_index = phase_index_start;
+		buffer_manager.current_buffer_index = buffer_start_index;
 
-    } else if (direction == RIGHT_SIDE) {
-        // Moving right
-        phase_index_start = buffer_manager.current_phase_index + buffer_manager.window_size;
-        buffer_start_index = (buffer_manager.current_buffer_index + buffer_manager.window_size) % buffer_manager.buffer_size;
+		// Update analysis start index if necessary
+		if (phase_index_start < analysis_start_index) {
+			analysis_start_index = phase_index_start;
+		}
 
-        // Check if the buffer indices are out of bounds
-        if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
-            printf("[update_buffer_for_direction] Buffer index out of bounds. Setting error flag.\n");
-            set_boundary_error_flag(1);  // Set the boundary error flag
-            return;  // Exit the function to stop further processing
-        }
+	} else if (direction == RIGHT_SIDE) {
+		// Moving right
+		phase_index_start = buffer_manager.current_phase_index + buffer_manager.window_size;
+		buffer_start_index = (buffer_manager.current_buffer_index + buffer_manager.window_size) % buffer_manager.buffer_size;
 
-        // Debugging: Log the movement and new indices
-        //#ifdef BUFFER_DEBUG
-        printf("[update_buffer_for_direction] Moving right by %d. New phase index start: %d, new buffer start index: %d\n",
-               move_amount, phase_index_start, buffer_start_index);
-        //#endif
+		// Check if the buffer indices are out of bounds
+		if (buffer_start_index < 0 || buffer_start_index + buffer_manager.window_size > buffer_manager.buffer_size) {
+			printf("[update_buffer_for_direction] Buffer index out of bounds. Setting error flag.\n");
+			set_boundary_error_flag(1);  // Set the boundary error flag
+			return;  // Exit the function to stop further processing
+		}
 
-        // Update indices
-        buffer_manager.current_phase_index += move_amount;
-        buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
+		printf("[update_buffer_for_direction] Moving right by %d. New phase index start: %d, new buffer start index: %d\n",
+		       move_amount, phase_index_start, buffer_start_index);
 
-        // Update analysis end index if necessary
-        int16_t new_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
-        if (new_end_index > analysis_end_index) {
-            analysis_end_index = new_end_index;
-        }
+		// Update indices
+		buffer_manager.current_phase_index += move_amount;
+		buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
 
-    } else {
-        // Invalid direction
-        #ifdef BUFFER_DEBUG
-        printf("[update_buffer_for_direction] Direction undecided. No movement.\n");
-        #endif
-        return;
-    }
+		// Update analysis end index if necessary
+		int16_t new_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
+		if (new_end_index > analysis_end_index) {
+			analysis_end_index = new_end_index;
+		}
 
-    // Instead of calling AdptSweepAddDataPoint, set up buffer update info
-    buffer_update_info.needs_update = true;
-    buffer_update_info.phase_index_start = phase_index_start;
-    buffer_update_info.buffer_start_index = buffer_start_index;
-    buffer_update_info.move_amount = move_amount;
+	} else
+	{
+		// Invalid direction
+#ifdef BUFFER_DEBUG
+		printf("[update_buffer_for_direction] Direction undecided. No movement.\n");
+#endif
+		return;
+	}
 
-    // Reset buffer_shift_offset since we've updated the buffer
-    buffer_shift_offset = 0;
+	// Instead of calling AdptSweepAddDataPoint, set up buffer update info
+	buffer_update_info.needs_update = true;
+	buffer_update_info.phase_index_start = phase_index_start;
+	buffer_update_info.buffer_start_index = buffer_start_index;
+	buffer_update_info.move_amount = move_amount;
 
-    // Log final indices after update
-    //#ifdef BUFFER_DEBUG
-    printf("[update_buffer_for_direction] Updated buffer indices. Current phase index: %d, Buffer start index: %d\n",
-           buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
-    //#endif
+	// Reset buffer_shift_offset since we've updated the buffer
+	buffer_shift_offset = 0;
+
+	// Log final indices after update
+	printf("[update_buffer_for_direction] Updated buffer indices. Current phase index: %d, Buffer start index: %d\n",
+	       buffer_manager.current_phase_index, buffer_manager.current_buffer_index);
 }
 
 
@@ -300,37 +279,37 @@ void update_buffer_for_direction(int direction, int move_amount) {
  *
  */
 void handle_undecided_case(void) {
-    #ifdef BUFFER_DEBUG
-    printf("[handle_undecided_case] Entering undecided case handler.\n");
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[handle_undecided_case] Entering undecided case handler.\n");
+#endif
 
-    // Jump forward by the window size in the phaseAngle array
-    buffer_manager.current_phase_index += buffer_manager.window_size;
+	// Jump forward by the window size in the phaseAngle array
+	buffer_manager.current_phase_index += buffer_manager.window_size;
 
-    // Ensure we don't exceed the phase angle size
-    if (buffer_manager.current_phase_index + buffer_manager.window_size > phase_angle_size) {
-        #ifdef BUFFER_DEBUG
-        printf("[handle_undecided_case] Phase index exceeds phase angle size. Stopping analysis.\n");
-        #endif
-        return;
-    }
+	// Ensure we don't exceed the phase angle size
+	if (buffer_manager.current_phase_index + buffer_manager.window_size > phase_angle_size) {
+#ifdef BUFFER_DEBUG
+		printf("[handle_undecided_case] Phase index exceeds phase angle size. Stopping analysis.\n");
+#endif
+		return;
+	}
 
-    // Reset buffer_shift_offset since we're discarding previous analysis
-    buffer_shift_offset = 0;
+	// Reset buffer_shift_offset since we're discarding previous analysis
+	buffer_shift_offset = 0;
 
-    // Update global analysis tracking indices
-    analysis_start_index = buffer_manager.current_phase_index;
-    analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
+	// Update global analysis tracking indices
+	analysis_start_index = buffer_manager.current_phase_index;
+	analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
 
-    #ifdef BUFFER_DEBUG
-    printf("[handle_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[handle_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
+#endif
 
-    // Set up buffer update info instead of calling AdptSweepAddDataPoint
-    buffer_update_info.needs_update = true;
-    buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
-    buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
-    buffer_update_info.move_amount = buffer_manager.window_size;
+	// Set up buffer update info instead of calling AdptSweepAddDataPoint
+	buffer_update_info.needs_update = true;
+	buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
+	buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
+	buffer_update_info.move_amount = buffer_manager.window_size;
 }
 
 
@@ -343,38 +322,38 @@ void handle_undecided_case(void) {
  *
  */
 void handle_negative_undecided_case() {
-    #ifdef BUFFER_DEBUG
-    printf("[handle_negative_undecided_case] Entering negative undecided case handler.\n");
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[handle_negative_undecided_case] Entering negative undecided case handler.\n");
+#endif
 
-    // Jump backward by the window size in the phaseAngle array
-    buffer_manager.current_phase_index -= buffer_manager.window_size;
+	// Jump backward by the window size in the phaseAngle array
+	buffer_manager.current_phase_index -= buffer_manager.window_size;
 
-    // Ensure we don't go below 0 in the phase angle size
-    if (buffer_manager.current_phase_index < 0) {
-        buffer_manager.current_phase_index = 0;
-        #ifdef BUFFER_DEBUG
-        printf("[handle_negative_undecided_case] Phase index went below 0. Stopping analysis.\n");
-        #endif
-        return;
-    }
+	// Ensure we don't go below 0 in the phase angle size
+	if (buffer_manager.current_phase_index < 0) {
+		buffer_manager.current_phase_index = 0;
+#ifdef BUFFER_DEBUG
+		printf("[handle_negative_undecided_case] Phase index went below 0. Stopping analysis.\n");
+#endif
+		return;
+	}
 
-    // Reset buffer_shift_offset since we're discarding previous analysis
-    buffer_shift_offset = 0;
+	// Reset buffer_shift_offset since we're discarding previous analysis
+	buffer_shift_offset = 0;
 
-    // Update global analysis tracking indices
-    analysis_start_index = buffer_manager.current_phase_index;
-    analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
+	// Update global analysis tracking indices
+	analysis_start_index = buffer_manager.current_phase_index;
+	analysis_end_index = buffer_manager.current_phase_index + buffer_manager.window_size - 1;
 
-    #ifdef BUFFER_DEBUG
-    printf("[handle_negative_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[handle_negative_undecided_case] Jumping to phase index: %d\n", buffer_manager.current_phase_index);
+#endif
 
-    // Set up buffer update info instead of calling AdptSweepAddDataPoint
-    buffer_update_info.needs_update = true;
-    buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
-    buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
-    buffer_update_info.move_amount = buffer_manager.window_size;
+	// Set up buffer update info instead of calling AdptSweepAddDataPoint
+	buffer_update_info.needs_update = true;
+	buffer_update_info.phase_index_start = buffer_manager.current_phase_index;
+	buffer_update_info.buffer_start_index = buffer_manager.current_buffer_index;
+	buffer_update_info.move_amount = buffer_manager.window_size;
 }
 
 
@@ -382,69 +361,69 @@ void handle_negative_undecided_case() {
  * @brief Moves the analysis window by a specified number of positions left or right and updates the buffer only if necessary.
  *
  * This function moves the current window either left or right by the specified `move_amount` positions and checks whether the values
- * for the new window are already available in the buffer by comparing the `analysis_start_index` and 
- * `analysis_end_index` against the new window range. 
+ * for the new window are already available in the buffer by comparing the `analysis_start_index` and
+ * `analysis_end_index` against the new window range.
  *
  * @param direction   Direction to move the window. Either `LEFT_SIDE` or `RIGHT_SIDE`.
  * @param move_amount Number of positions to move the window in the specified direction.
  */
 void move_window_and_update_if_needed(int direction, int move_amount) {
-    int16_t new_phase_index_start = buffer_manager.current_phase_index + (direction == RIGHT_SIDE ? move_amount : -move_amount);
-    int16_t new_phase_index_end = new_phase_index_start + buffer_manager.window_size - 1;
+	int16_t new_phase_index_start = buffer_manager.current_phase_index + (direction == RIGHT_SIDE ? move_amount : -move_amount);
+	int16_t new_phase_index_end = new_phase_index_start + buffer_manager.window_size - 1;
 
-    bool need_buffer_update = false;
+	bool need_buffer_update = false;
 
-    #ifdef BUFFER_DEBUG
-    printf("[move_window_and_update_if_needed] Attempting to move window. Direction: %d, Move amount: %d\n", direction, move_amount);
-    #endif
+#ifdef BUFFER_DEBUG
+	printf("[move_window_and_update_if_needed] Attempting to move window. Direction: %d, Move amount: %d\n", direction, move_amount);
+#endif
 
-    if (direction == LEFT_SIDE) {
-        if (new_phase_index_start < analysis_start_index) {
-            need_buffer_update = true;
-        }
-    } else if (direction == RIGHT_SIDE) {
-        if (new_phase_index_end > analysis_end_index) {
-            need_buffer_update = true;
-        }
-    } else {
-        return;  // Invalid direction
-    }
+	if (direction == LEFT_SIDE) {
+		if (new_phase_index_start < analysis_start_index) {
+			need_buffer_update = true;
+		}
+	} else if (direction == RIGHT_SIDE) {
+		if (new_phase_index_end > analysis_end_index) {
+			need_buffer_update = true;
+		}
+	} else {
+		return;  // Invalid direction
+	}
 
-    if (need_buffer_update) {
-        // Set up buffer update info
-        update_buffer_for_direction(direction, move_amount);
-    } else {
-        // Adjust indices without updating the buffer
-        if (direction == LEFT_SIDE) {
-            buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index - move_amount + buffer_manager.buffer_size) % buffer_manager.buffer_size;
-        } else {
-            buffer_manager.current_phase_index = new_phase_index_start;
-            buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
-        }
+	if (need_buffer_update) {
+		// Set up buffer update info
+		update_buffer_for_direction(direction, move_amount);
+	} else {
+		// Adjust indices without updating the buffer
+		if (direction == LEFT_SIDE) {
+			buffer_manager.current_phase_index = new_phase_index_start;
+			buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index - move_amount + buffer_manager.buffer_size) % buffer_manager.buffer_size;
+		} else {
+			buffer_manager.current_phase_index = new_phase_index_start;
+			buffer_manager.current_buffer_index = (buffer_manager.current_buffer_index + move_amount) % buffer_manager.buffer_size;
+		}
 
-        // Update buffer_shift_offset
-        //buffer_shift_offset = (buffer_shift_offset + move_amount) % buffer_manager.buffer_size;
+		// Update buffer_shift_offset
+		//buffer_shift_offset = (buffer_shift_offset + move_amount) % buffer_manager.buffer_size;
 
-        #ifdef BUFFER_DEBUG
-        printf("[move_window_and_update_if_needed] Window already in buffer. Shifted by %d.\n", move_amount);
-        #endif
-    }
+#ifdef BUFFER_DEBUG
+		printf("[move_window_and_update_if_needed] Window already in buffer. Shifted by %d.\n", move_amount);
+#endif
+	}
 
-    // Update analysis indices if necessary
-    if (new_phase_index_start < analysis_start_index) {
-        analysis_start_index = new_phase_index_start;
-    }
-    if (new_phase_index_end > analysis_end_index) {
-        analysis_end_index = new_phase_index_end;
-    }
+	// Update analysis indices if necessary
+	if (new_phase_index_start < analysis_start_index) {
+		analysis_start_index = new_phase_index_start;
+	}
+	if (new_phase_index_end > analysis_end_index) {
+		analysis_end_index = new_phase_index_end;
+	}
 
-    // Debug: Print the updated indices
-    //#ifdef BUFFER_DEBUG
-    printf("[move_window_and_update_if_needed] Updated window to phase index [%d - %d]\n", 
-           new_phase_index_start, new_phase_index_end);
-    printf("Updated buffer index to %d\n", buffer_manager.current_buffer_index);
-    //#endif
+	// Debug: Print the updated indices
+	//#ifdef BUFFER_DEBUG
+	printf("[move_window_and_update_if_needed] Updated window to phase index [%d - %d]\n",
+	       new_phase_index_start, new_phase_index_end);
+	printf("Updated buffer index to %d\n", buffer_manager.current_buffer_index);
+	//#endif
 }
 
 /**
@@ -452,7 +431,7 @@ void move_window_and_update_if_needed(int direction, int move_amount) {
  *
  * This function checks whether a buffer update is necessary based on the `buffer_update_info` structure,
  * which contains information about pending buffer updates. If a buffer update is required (indicated by the
- * `needs_update` flag), the function proceeds to update the phase angles in the buffer by calling 
+ * `needs_update` flag), the function proceeds to update the phase angles in the buffer by calling
  * `AdptSweepAddDataPoint`. Once the update is completed, the `needs_update` flag is reset to prevent
  * redundant updates.
  *
@@ -470,23 +449,12 @@ void move_window_and_update_if_needed(int direction, int move_amount) {
  *   a buffer update is needed and call this function to handle it.
  * - If phase angles have moved out of the current buffer range, this function ensures that the necessary
  *   new data is loaded into the buffer without interrupting the analysis logic.
- * 
+ *
  * By separating the update check and the actual buffer modification, this function helps maintain a clean
  * separation of concerns, ensuring that the analysis and buffer updates happen in an orderly, non-blocking fashion.
- * 
+ *
  */
-void perform_buffer_update_if_needed() {
-    if (buffer_update_info.needs_update) {
-        AdptSweepAddDataPoint(
-            buffer_update_info.phase_index_start,
-            buffer_update_info.buffer_start_index,
-            buffer_update_info.move_amount
-        );
 
-        // Reset the update flag
-        buffer_update_info.needs_update = false;
-    }
-}
 
 /**
  * @brief Prints the values within the tracked interval of phase indices from the beginning to the end.
@@ -495,30 +463,30 @@ void perform_buffer_update_if_needed() {
  * within the sliding window interval of phase indices from `analysis_start_index` to `analysis_end_index`.
  */
 void print_analysis_interval(void) {
-    if (analysis_start_index == -1 || analysis_end_index == -1) {
-        printf("No analysis interval found.\n");
-        return;
-    }
+	if (analysis_start_index == -1 || analysis_end_index == -1) {
+		printf("No analysis interval found.\n");
+		return;
+	}
 
-    printf("\n[RESULT] Sliding Window Analysis Interval:\n");
-    printf("Analysis start index: %d, Analysis end index: %d\n", analysis_start_index, analysis_end_index);
+	printf("\n[RESULT] Sliding Window Analysis Interval:\n");
+	printf("Analysis start index: %d, Analysis end index: %d\n", analysis_start_index, analysis_end_index);
 
-    printf("\n[RESULT] Buffer Values in the Interval:\n");
+	printf("\n[RESULT] Buffer Values in the Interval:\n");
 
-    for (int phase_index = analysis_start_index; phase_index <= analysis_end_index; ++phase_index) {
-        int relative_position = phase_index - buffer_manager.current_phase_index;
-        int adjusted_buffer_index = (buffer_manager.current_buffer_index + relative_position - buffer_shift_offset + buffer_manager.buffer_size) % buffer_manager.buffer_size;
+	for (int phase_index = analysis_start_index; phase_index <= analysis_end_index; ++phase_index) {
+		int relative_position = phase_index - buffer_manager.current_phase_index;
+		int adjusted_buffer_index = (buffer_manager.current_buffer_index + relative_position - buffer_shift_offset + buffer_manager.buffer_size) % buffer_manager.buffer_size;
 
-        // Debugging: Log the index mappings
-        #ifdef BUFFER_DEBUG
-        printf("[print_analysis_interval] Phase Index: %d -> Buffer Index: %d\n", phase_index, adjusted_buffer_index);
-        #endif
+		// Debugging: Log the index mappings
+#ifdef BUFFER_DEBUG
+		printf("[print_analysis_interval] Phase Index: %d -> Buffer Index: %d\n", phase_index, adjusted_buffer_index);
+#endif
 
-        printf("Phase Index %d -> Buffer Index %d: Phase Angle: %.6f, Impedance: %.6f\n",
-               phase_index, adjusted_buffer_index,
-               buffer_manager.buffer[adjusted_buffer_index].phaseAngle,
-               buffer_manager.buffer[adjusted_buffer_index].impedance);
-    }
+		printf("Phase Index %d -> Buffer Index %d: Phase Angle: %.6f, Impedance: %.6f\n",
+		       phase_index, adjusted_buffer_index,
+		       buffer_manager.buffer[adjusted_buffer_index].phaseAngle,
+		       buffer_manager.buffer[adjusted_buffer_index].impedance);
+	}
 
-    printf("--------------------------------------\n");
+	printf("--------------------------------------\n");
 }
